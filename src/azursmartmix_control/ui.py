@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 import html
+import re
+
 import httpx
 from nicegui import ui
 
@@ -22,6 +24,8 @@ AZURA_CSS = r"""
   --az-green: #22c55e;
   --az-red: #ef4444;
   --az-orange: #f59e0b;
+  --az-cyan: #22d3ee;
+  --az-violet: #a78bfa;
   --az-shadow: 0 10px 30px rgba(0,0,0,.25);
   --az-radius: 10px;
   --az-font: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
@@ -80,13 +84,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 
 .az-actions .q-btn{ border-radius: 10px !important; font-weight: 900 !important; text-transform:none !important; }
 .az-actions .q-btn--outline{ border:1px solid rgba(255,255,255,.55) !important; color:white !important; }
-
-.az-textarea textarea{
-  font-family: var(--az-mono) !important;
-  font-size: 12px !important;
-  color: rgba(255,255,255,.90) !important;
-  background: rgba(0,0,0,.25) !important;
-}
 
 .az-list{ display:flex; flex-direction:column; gap:8px; }
 .az-item{ padding: 10px 12px; border-radius: 10px; border: 1px solid var(--az-border); background: rgba(255,255,255,.04); }
@@ -158,6 +155,35 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .env-frame::-webkit-scrollbar-track{ background: rgba(255,255,255,.06); border-radius: 10px; }
 .env-frame::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.22); border-radius: 10px; }
 .env-frame::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.34); }
+
+/* ===== Console viewer (HTML <pre>) ===== */
+.console-frame{
+  height: 420px;
+  overflow: auto;
+  border: 1px solid var(--az-border);
+  border-radius: 10px;
+  background: rgba(0,0,0,.22);
+  padding: 10px 12px;
+}
+.console-pre{
+  margin: 0;
+  font-family: var(--az-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255,255,255,.86);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* tokens */
+.t-dim{ color: rgba(255,255,255,.45); }
+.t-info{ color: rgba(56, 189, 248, .95); }   /* sky */
+.t-warn{ color: rgba(245, 158, 11, .95); }   /* orange */
+.t-err{  color: rgba(239, 68, 68, .95); }    /* red */
+.t-ok{   color: rgba(34, 197, 94, .95); }    /* green */
+.t-vio{  color: rgba(167, 139, 250, .95); }  /* violet */
+.t-cyan{ color: rgba(34, 211, 238, .95); }   /* cyan */
+.t-bold{ font-weight: 900; }
 """
 
 AZURA_JS = r"""
@@ -189,8 +215,9 @@ class ControlUI:
         self._env_frame = None
         self._env_rows: List[Tuple[str, str]] = []
 
-        self._logs_engine = None
-        self._logs_sched = None
+        # logs
+        self._log_html_engine = None
+        self._log_html_sched = None
 
     def build(self) -> None:
         ui.add_head_html(f"<style>{AZURA_CSS}</style>")
@@ -234,7 +261,7 @@ class ControlUI:
 
     def _runtime_box(self, title: str):
         with ui.element("div").classes("rt-box"):
-            ui.label(title).classes("rt-box-h")  # <-- FIX: label supports text, element doesn't
+            ui.label(title).classes("rt-box-h")
             tbl = ui.html(self._runtime_table_html({}))
             return tbl
 
@@ -297,9 +324,11 @@ class ControlUI:
                 t_sched = ui.tab("scheduler")
                 with ui.tab_panels(tabs, value=t_engine).classes("w-full"):
                     with ui.tab_panel(t_engine):
-                        self._logs_engine = ui.textarea(value="").props("readonly rows=16").classes("w-full az-textarea")
+                        with ui.element("div").classes("console-frame"):
+                            self._log_html_engine = ui.html('<pre class="console-pre">—</pre>')
                     with ui.tab_panel(t_sched):
-                        self._logs_sched = ui.textarea(value="").props("readonly rows=16").classes("w-full az-textarea")
+                        with ui.element("div").classes("console-frame"):
+                            self._log_html_sched = ui.html('<pre class="console-pre">—</pre>')
 
     # ---------- HTTP helpers ----------
 
@@ -317,6 +346,43 @@ class ControlUI:
             r = await client.get(url)
             r.raise_for_status()
             return r.text
+
+    # ---------- Log highlight ----------
+
+    _re_level = re.compile(r"\b(INFO|WARN|WARNING|ERROR|CRITICAL|DEBUG)\b")
+    _re_engine_tag = re.compile(r"\bazurmixd\.engine\b")
+    _re_sched_tag = re.compile(r"\bazurmixd\.scheduler\b")
+    _re_preprocess = re.compile(r"\bpreprocess:\b")
+    _re_bridge = re.compile(r"\bbridgeplan:\b")
+    _re_aft = re.compile(r"\bAFT#\d+\b")
+    _re_icecast = re.compile(r"\b(Icecast|ICECAST|/status-json\.xsl|mount|listeners?)\b", re.IGNORECASE)
+    _re_uri = re.compile(r"\b(file:///[^ ]+)\b")
+
+    def _highlight_logs_html(self, text: str) -> str:
+        # escape first to prevent HTML injection, then do safe replacements
+        esc = html.escape(text)
+
+        def repl_level(m: re.Match) -> str:
+            lvl = m.group(1)
+            cls = "t-info"
+            if lvl in ("WARN", "WARNING"):
+                cls = "t-warn"
+            elif lvl in ("ERROR", "CRITICAL"):
+                cls = "t-err"
+            elif lvl == "DEBUG":
+                cls = "t-dim"
+            return f'<span class="{cls} t-bold">{lvl}</span>'
+
+        esc = self._re_level.sub(repl_level, esc)
+        esc = self._re_engine_tag.sub(r'<span class="t-cyan t-bold">azurmixd.engine</span>', esc)
+        esc = self._re_sched_tag.sub(r'<span class="t-cyan t-bold">azurmixd.scheduler</span>', esc)
+        esc = self._re_preprocess.sub(r'<span class="t-vio t-bold">preprocess:</span>', esc)
+        esc = self._re_bridge.sub(r'<span class="t-vio">bridgeplan:</span>', esc)
+        esc = self._re_aft.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
+        esc = self._re_icecast.sub(lambda m: f'<span class="t-cyan">{m.group(0)}</span>', esc)
+        esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
+
+        return f'<pre class="console-pre">{esc}</pre>'
 
     # ---------- Refresh ----------
 
@@ -433,20 +499,23 @@ class ControlUI:
                 )
 
     async def refresh_logs(self) -> None:
+        # engine
         try:
             eng = await self._get_text("/logs?service=engine&tail=200")
-            if self._logs_engine:
-                self._logs_engine.set_value(eng)
+            if self._log_html_engine:
+                self._log_html_engine.set_content(self._highlight_logs_html(eng))
         except Exception:
-            if self._logs_engine:
-                self._logs_engine.set_value("")
+            if self._log_html_engine:
+                self._log_html_engine.set_content('<pre class="console-pre">—</pre>')
+
+        # scheduler
         try:
             sch = await self._get_text("/logs?service=scheduler&tail=200")
-            if self._logs_sched:
-                self._logs_sched.set_value(sch)
+            if self._log_html_sched:
+                self._log_html_sched.set_content(self._highlight_logs_html(sch))
         except Exception:
-            if self._logs_sched:
-                self._logs_sched.set_value("")
+            if self._log_html_sched:
+                self._log_html_sched.set_content('<pre class="console-pre">—</pre>')
 
     def enable_autorefresh(self) -> None:
         if self._timer is not None:

@@ -27,6 +27,10 @@ AZURA_CSS = r"""
   --az-radius: 10px;
   --az-font: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
   --az-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* sizing knobs */
+  --wrap-max: 1860px;  /* ~x1.5 vs 1240 */
+  --grid-gap: 18px;
 }
 
 html, body {
@@ -34,8 +38,6 @@ html, body {
   color: var(--az-text) !important;
   font-family: var(--az-font) !important;
 }
-
-/* Remove default nicegui spacing quirks */
 .q-page-container, .q-layout, .q-page { background: var(--az-bg) !important; }
 
 /* Topbar */
@@ -45,19 +47,13 @@ html, body {
   border-bottom: 1px solid rgba(255,255,255,.15);
   box-shadow: var(--az-shadow);
 }
-.az-topbar .az-brand {
-  font-weight: 800;
-  letter-spacing: .2px;
-}
-.az-topbar .az-sub {
-  opacity: .85;
-  font-weight: 500;
-}
+.az-topbar .az-brand { font-weight: 900; letter-spacing: .2px; }
+.az-topbar .az-sub { opacity: .85; font-weight: 600; }
 
-/* Main container */
+/* Main container (wider) */
 .az-wrap {
   width: 100%;
-  max-width: 1240px;
+  max-width: var(--wrap-max);
   margin: 0 auto;
   padding: 18px 18px 28px 18px;
 }
@@ -66,9 +62,9 @@ html, body {
 .az-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: var(--grid-gap);
 }
-@media (max-width: 1100px){
+@media (max-width: 1200px){
   .az-grid { grid-template-columns: 1fr; }
 }
 
@@ -79,12 +75,16 @@ html, body {
   border-radius: var(--az-radius);
   box-shadow: var(--az-shadow);
   overflow: hidden;
+  min-width: 520px; /* makes columns feel wider on large screens */
+}
+@media (max-width: 1200px){
+  .az-card { min-width: unset; }
 }
 .az-card-h {
   background: var(--az-blue) !important;
   color: white !important;
   padding: 12px 14px;
-  font-weight: 800;
+  font-weight: 900;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -101,7 +101,7 @@ html, body {
   gap: 8px;
   padding: 6px 10px;
   border-radius: 999px;
-  font-weight: 700;
+  font-weight: 800;
   font-size: 12px;
   border: 1px solid var(--az-border);
   background: rgba(255,255,255,.05);
@@ -122,37 +122,23 @@ html, body {
 .az-kv .v { color: var(--az-text); word-break: break-word; }
 .az-mono { font-family: var(--az-mono); }
 
-.az-now-title {
-  font-size: 20px;
-  font-weight: 900;
-  margin: 2px 0 6px 0;
-}
+.az-now-title { font-size: 20px; font-weight: 950; margin: 2px 0 6px 0; }
 .az-small { color: var(--az-muted); font-size: 12px; }
 
-.az-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.az-list { display: flex; flex-direction: column; gap: 8px; }
 .az-item {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--az-border);
   background: rgba(255,255,255,.04);
 }
-.az-item .idx {
-  display: inline-block;
-  min-width: 24px;
-  font-weight: 900;
-  color: rgba(255,255,255,.75);
-}
-.az-item .txt {
-  font-weight: 600;
-}
+.az-item .idx { display: inline-block; min-width: 24px; font-weight: 950; color: rgba(255,255,255,.75); }
+.az-item .txt { font-weight: 650; }
 
+/* Buttons */
 .az-actions .q-btn {
   border-radius: 10px !important;
-  font-weight: 800 !important;
+  font-weight: 900 !important;
   text-transform: none !important;
 }
 .az-actions .q-btn--outline {
@@ -160,10 +146,7 @@ html, body {
   color: white !important;
 }
 
-.az-tabs .q-tab { color: rgba(255,255,255,.75) !important; }
-.az-tabs .q-tab--active { color: white !important; font-weight: 900 !important; }
-.az-tabs .q-tab-panels { background: transparent !important; }
-
+/* Logs textarea */
 .az-textarea textarea {
   font-family: var(--az-mono) !important;
   font-size: 12px !important;
@@ -171,66 +154,94 @@ html, body {
   background: rgba(0,0,0,.25) !important;
 }
 
-.az-table .q-table__container {
-  background: rgba(0,0,0,.15) !important;
+/* ========== Dark table overrides (kill white backgrounds) ========== */
+.az-table .q-table__container{
+  background: rgba(0,0,0,.18) !important;
   border: 1px solid var(--az-border) !important;
   border-radius: 10px !important;
+  overflow: hidden;
 }
-.az-table thead tr th {
-  color: rgba(255,255,255,.80) !important;
+
+/* Make the internal scroll container dark as well */
+.az-table .q-table__middle,
+.az-table .q-virtual-scroll__content,
+.az-table .q-table__middle.scroll,
+.az-table .q-table__middle div,
+.az-table .q-table__grid-content {
+  background: transparent !important;
 }
-.az-table tbody tr td {
+
+/* Header sticky + dark */
+.az-table thead tr th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(0,0,0,.28) !important;
+  color: rgba(255,255,255,.86) !important;
+  border-bottom: 1px solid var(--az-border) !important;
+}
+
+/* Cells dark */
+.az-table tbody tr td{
+  background: transparent !important;
   color: rgba(255,255,255,.90) !important;
+  border-bottom: 1px solid rgba(255,255,255,.06) !important;
 }
+
+/* Remove hover white flash */
+.az-table tbody tr:hover td{
+  background: rgba(255,255,255,.05) !important;
+}
+
+/* ========== Engine env frame: fixed height + visible scrollbar ========== */
+.env-frame {
+  max-height: 360px;       /* limit height */
+  overflow-y: auto;        /* internal scroll */
+  padding-right: 6px;      /* room for scrollbar */
+}
+
+/* make scrollbar visible (webkit) */
+.env-frame::-webkit-scrollbar { width: 10px; }
+.env-frame::-webkit-scrollbar-track { background: rgba(255,255,255,.06); border-radius: 10px; }
+.env-frame::-webkit-scrollbar-thumb { background: rgba(255,255,255,.22); border-radius: 10px; }
+.env-frame::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.34); }
 """
 
 AZURA_JS = r"""
-// Tiny helper: allow click-to-copy on any element with data-copy.
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-copy]');
   if (!el) return;
   const txt = el.getAttribute('data-copy') || el.textContent || '';
   if (!txt) return;
-  navigator.clipboard.writeText(txt).then(() => {
-    el.classList.add('copied');
-    setTimeout(() => el.classList.remove('copied'), 400);
-  }).catch(()=>{});
+  navigator.clipboard.writeText(txt).catch(()=>{});
 });
 """
 
 
 class ControlUI:
-    """AzurCast-ish control panel (2 columns) with CSS+JS supercharge."""
-
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_base = settings.api_prefix.rstrip("/")
         self.timeout = httpx.Timeout(2.5, connect=1.5)
         self._timer = None
 
-        # runtime
         self._docker_badge = None
         self._engine_kv = {}
         self._sched_kv = {}
 
-        # now/upcoming
         self._now_title = None
         self._up_list_container = None
 
-        # env
         self._env_table = None
 
-        # logs
         self._logs_engine = None
         self._logs_sched = None
 
     def build(self) -> None:
         ui.add_head_html(f"<style>{AZURA_CSS}</style>")
         ui.add_head_html(f"<script>{AZURA_JS}</script>")
-
         ui.page_title("AzurSmartMix Control")
 
-        # Topbar
         with ui.header().classes("az-topbar items-center justify-between"):
             with ui.row().classes("items-center gap-3"):
                 ui.label("azuracast").classes("az-brand text-xl")
@@ -240,24 +251,19 @@ class ControlUI:
                 ui.button("Auto 5s", on_click=self.enable_autorefresh).props("outline")
                 ui.button("Stop", on_click=self.disable_autorefresh).props("outline")
 
-        # Main wrap + grid
         with ui.element("div").classes("az-wrap"):
             with ui.element("div").classes("az-grid"):
-                # LEFT COL
                 self._card_runtime()
                 self._card_env()
-
-                # RIGHT COL
                 self._card_now()
                 self._card_upcoming()
 
-            # Full width logs below (2 columns)
             with ui.element("div").classes("az-grid").style("margin-top: 16px;"):
                 self._card_logs()
 
         ui.timer(0.1, self.refresh_all, once=True)
 
-    # -------- Cards --------
+    # ---- Cards ----
 
     def _card_runtime(self) -> None:
         with ui.element("div").classes("az-card"):
@@ -267,12 +273,12 @@ class ControlUI:
                     '<span class="az-badge"><span class="az-dot warn"></span><span>Docker: …</span></span>'
                 )
             with ui.element("div").classes("az-card-b"):
-                with ui.row().classes("w-full gap-4"):
+                with ui.row().classes("w-full gap-6"):
                     self._engine_kv = self._kv_block("Engine")
                     self._sched_kv = self._kv_block("Scheduler")
 
     def _kv_block(self, title: str) -> Dict[str, Any]:
-        with ui.element("div").style("flex:1; min-width: 280px;"):
+        with ui.element("div").style("flex:1; min-width: 320px;"):
             ui.label(title).classes("text-sm font-bold").style("margin-bottom: 10px; opacity:.9;")
             kv = ui.element("div").classes("az-kv")
             rows = {
@@ -282,7 +288,6 @@ class ControlUI:
                 "health": ui.html(""),
                 "uptime": ui.html(""),
             }
-            # init placeholders
             with kv:
                 self._kv_row("name", rows["name"])
                 self._kv_row("image", rows["image"], mono=True)
@@ -294,7 +299,6 @@ class ControlUI:
     def _kv_row(self, key: str, value_widget: Any, mono: bool = False) -> None:
         ui.html(f'<div class="k">{key}</div>')
         cls = "v az-mono" if mono else "v"
-        # data-copy enables click-to-copy via AZURA_JS
         value_widget.set_content(f'<div class="{cls}" data-copy="">—</div>')
 
     def _card_env(self) -> None:
@@ -302,7 +306,9 @@ class ControlUI:
             with ui.element("div").classes("az-card-h"):
                 ui.label("Engine env (docker-compose)")
                 ui.label(self.settings.compose_service_engine).classes("text-xs").style("opacity:.85;")
-            with ui.element("div").classes("az-card-b"):
+
+            # IMPORTANT: put the table inside a scrollable frame
+            with ui.element("div").classes("az-card-b env-frame"):
                 self._env_table = ui.table(
                     columns=[
                         {"name": "key", "label": "KEY", "field": "key", "align": "left"},
@@ -335,7 +341,7 @@ class ControlUI:
             with ui.element("div").classes("az-card-h"):
                 ui.label("Logs")
                 ui.label("tail=200").classes("text-xs").style("opacity:.85;")
-            with ui.element("div").classes("az-card-b az-tabs"):
+            with ui.element("div").classes("az-card-b"):
                 tabs = ui.tabs().classes("w-full")
                 t_engine = ui.tab("engine")
                 t_sched = ui.tab("scheduler")
@@ -346,7 +352,7 @@ class ControlUI:
                     with ui.tab_panel(t_sched):
                         self._logs_sched = ui.textarea(value="").props("readonly rows=16").classes("w-full az-textarea")
 
-    # -------- HTTP helpers --------
+    # ---- HTTP helpers ----
 
     async def _get_json(self, path: str) -> Dict[str, Any]:
         url = f"http://127.0.0.1:{self.settings.ui_port}{self.api_base}{path}"
@@ -363,7 +369,7 @@ class ControlUI:
             r.raise_for_status()
             return r.text
 
-    # -------- Refresh cycle --------
+    # ---- Refresh cycle ----
 
     async def refresh_all(self) -> None:
         await self.refresh_runtime()
@@ -375,8 +381,8 @@ class ControlUI:
     async def refresh_runtime(self) -> None:
         try:
             rt = await self._get_json("/panel/runtime")
-        except Exception as e:
-            self._set_docker_badge(ok=False, text=f"Docker: error")
+        except Exception:
+            self._set_docker_badge(ok=False, text="Docker: error")
             return
 
         docker_ok = bool(rt.get("docker_ping"))
@@ -389,7 +395,9 @@ class ControlUI:
         if self._docker_badge is None:
             return
         dot = "ok" if ok else "err"
-        self._docker_badge.set_content(f'<span class="az-badge"><span class="az-dot {dot}"></span><span>{text}</span></span>')
+        self._docker_badge.set_content(
+            f'<span class="az-badge"><span class="az-dot {dot}"></span><span>{text}</span></span>'
+        )
 
     def _fill_kv(self, kv: Dict[str, Any], data: Dict[str, Any]) -> None:
         if not kv:
@@ -433,7 +441,7 @@ class ControlUI:
             now = await self._get_json("/panel/now")
             title = now.get("title") or "—"
             self._now_title.set_text(title)
-        except Exception as e:
+        except Exception:
             self._now_title.set_text("—")
 
     async def refresh_upcoming(self) -> None:
@@ -454,7 +462,10 @@ class ControlUI:
                 return
             for i, t in enumerate(titles, start=1):
                 t_safe = str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                ui.html(f'<div class="az-item"><span class="idx">{i}.</span> <span class="txt" data-copy="{t_safe}">{t_safe}</span></div>')
+                ui.html(
+                    f'<div class="az-item"><span class="idx">{i}.</span> '
+                    f'<span class="txt" data-copy="{t_safe}">{t_safe}</span></div>'
+                )
 
     async def refresh_logs(self) -> None:
         try:

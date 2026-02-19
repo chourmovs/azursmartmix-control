@@ -1,0 +1,123 @@
+# .github/workflows/docker-publish.yml
+name: Build & Push (Docker Hub) — azursmartmix-control
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker tag (e.g. v0.1.0, feature-x). Leave empty for auto."
+        required: false
+        default: ""
+      push_latest:
+        description: "Also publish :latest ?"
+        type: boolean
+        default: false
+      platforms:
+        description: "Platforms (comma-separated)"
+        default: "linux/amd64"
+
+permissions:
+  contents: read
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY: docker.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute safe image name & tags
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          USER_RAW="${{ secrets.DOCKERHUB_USERNAME }}"
+          if [[ -z "${USER_RAW}" ]]; then
+            echo "Missing DOCKERHUB_USERNAME secret"; exit 1
+          fi
+          USER_LC="$(printf '%s' "$USER_RAW" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9._-')"
+
+          # Image repo name: either repo name (default) or explicit secret override
+          REPO_RAW="${{ secrets.DOCKERHUB_REPO }}"
+          if [[ -z "${REPO_RAW}" ]]; then
+            REPO_RAW="${GITHUB_REPOSITORY#*/}"
+          fi
+          REPO_LC="$(printf '%s' "$REPO_RAW" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9._-')"
+
+          IMG="${REGISTRY}/${USER_LC}/${REPO_LC}"
+
+          TAG_RAW="${{ inputs.tag }}"
+          if [[ -n "${TAG_RAW}" ]]; then
+            TAG_BASE="${TAG_RAW}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG_BASE="${GITHUB_REF_NAME}"
+          else
+            TAG_BASE="sha-${GITHUB_SHA:0:12}"
+          fi
+
+          TAG_SAFE="$(printf '%s' "$TAG_BASE" | tr -cd 'A-Za-z0-9._-')"
+          if [[ -z "${TAG_SAFE}" ]]; then
+            echo "Computed empty tag, refusing."; exit 1
+          fi
+
+          TAGS="${IMG}:${TAG_SAFE}"
+
+          PUSH_LATEST="false"
+          # auto-latest when pushing tag 'main' isn't enabled here because we only run via workflow_dispatch
+          # but keep parity with your template: allow :latest by explicit input
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${{ inputs.push_latest }}" == "true" ]]; then
+            PUSH_LATEST="true"
+          fi
+
+          if [[ "${PUSH_LATEST}" == "true" ]]; then
+            TAGS="${TAGS}"$'\n'"${IMG}:latest"
+          fi
+
+          {
+            echo "image=${IMG}"
+            echo "tag_primary=${IMG}:${TAG_SAFE}"
+            echo "tags<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice title=Image name::${IMG}"
+          echo "::notice title=Tags::${TAGS//$'\n'/, }"
+
+      - name: Set up QEMU (only if arm64)
+        if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub (PAT)
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push (optimized storage)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.vars.outputs.tags }}
+          provenance: false
+          attestations: false
+          outputs: type=image
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}

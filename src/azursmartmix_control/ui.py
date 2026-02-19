@@ -34,9 +34,32 @@ AZURA_CSS = r"""
   --grid-gap: 18px;
 }
 
+/* Global: never allow light backgrounds to leak */
 html, body { background: var(--az-bg) !important; color: var(--az-text) !important; font-family: var(--az-font) !important; }
 .q-page-container, .q-layout, .q-page { background: var(--az-bg) !important; }
 .q-card, .q-table__container, .q-menu, .q-dialog__inner, .q-drawer { background: transparent !important; }
+
+/* Nuke Quasar panel/tabs backgrounds (the real culprit) */
+.q-tab-panels,
+.q-tab-panel,
+.q-panel,
+.q-panel-parent,
+.q-tab__content,
+.q-tab__label,
+.q-tab__indicator,
+.q-tabs,
+.q-tabs__content,
+.q-tabs__content--align-justify,
+.q-tab-panels .q-panel,
+.q-tab-panels .q-panel-parent {
+  background: transparent !important;
+}
+
+/* Some NiceGUI HTML wrapper can have background */
+.q-html,
+.q-html * {
+  background: transparent !important;
+}
 
 .az-topbar{
   background: linear-gradient(0deg, var(--az-blue) 0%, var(--az-blue-dark) 100%) !important;
@@ -156,30 +179,29 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .env-frame::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.22); border-radius: 10px; }
 .env-frame::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.34); }
 
-/* ===== Console viewer (HTML <pre>) ===== */
+/* ===== Console viewer (no PRE, no light background possible) ===== */
 .console-frame{
   height: 420px;
   overflow: auto;
   border: 1px solid var(--az-border);
   border-radius: 10px;
-  background: rgba(0,0,0,.22) !important;
+  background: rgba(0,0,0,.55) !important;  /* explicit dark */
   padding: 10px 12px;
 }
 
-/* hard-kill any inherited pre background (this is your grey culprit) */
-.console-frame * { background: transparent !important; }
-.console-frame pre,
-.console-frame code { background: transparent !important; }
+/* Hard kill any inherited background inside the console */
+.console-frame, .console-frame * { background: transparent !important; }
+.console-frame { background: rgba(0,0,0,.55) !important; }
 
-.console-pre{
-  margin: 0 !important;
-  padding: 0 !important;
+.console-content{
   font-family: var(--az-mono) !important;
   font-size: 12px !important;
   line-height: 1.35 !important;
   color: rgba(255,255,255,.86) !important;
   white-space: pre-wrap !important;
   word-break: break-word !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
 /* tokens */
@@ -328,13 +350,14 @@ class ControlUI:
                 tabs = ui.tabs().classes("w-full")
                 t_engine = ui.tab("engine")
                 t_sched = ui.tab("scheduler")
+
                 with ui.tab_panels(tabs, value=t_engine).classes("w-full"):
                     with ui.tab_panel(t_engine):
-                        with ui.element("div").classes("console-frame"):
-                            self._log_html_engine = ui.html('<pre class="console-pre">—</pre>')
+                        with ui.element("div").classes("console-frame").style("background: rgba(0,0,0,.55) !important;"):
+                            self._log_html_engine = ui.html('<div class="console-content">—</div>')
                     with ui.tab_panel(t_sched):
-                        with ui.element("div").classes("console-frame"):
-                            self._log_html_sched = ui.html('<pre class="console-pre">—</pre>')
+                        with ui.element("div").classes("console-frame").style("background: rgba(0,0,0,.55) !important;"):
+                            self._log_html_sched = ui.html('<div class="console-content">—</div>')
 
     # ---------- HTTP helpers ----------
 
@@ -387,7 +410,7 @@ class ControlUI:
         esc = self._re_icecast.sub(lambda m: f'<span class="t-cyan">{m.group(0)}</span>', esc)
         esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
 
-        return f'<pre class="console-pre">{esc}</pre>'
+        return f'<div class="console-content">{esc}</div>'
 
     # ---------- Refresh ----------
 
@@ -510,7 +533,7 @@ class ControlUI:
                 self._log_html_engine.set_content(self._highlight_logs_html(eng))
         except Exception:
             if self._log_html_engine:
-                self._log_html_engine.set_content('<pre class="console-pre">—</pre>')
+                self._log_html_engine.set_content('<div class="console-content">—</div>')
 
         try:
             sch = await self._get_text("/logs?service=scheduler&tail=200")
@@ -518,7 +541,7 @@ class ControlUI:
                 self._log_html_sched.set_content(self._highlight_logs_html(sch))
         except Exception:
             if self._log_html_sched:
-                self._log_html_sched.set_content('<pre class="console-pre">—</pre>')
+                self._log_html_sched.set_content('<div class="console-content">—</div>')
 
     def enable_autorefresh(self) -> None:
         if self._timer is not None:

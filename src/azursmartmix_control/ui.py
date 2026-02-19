@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import httpx
 from nicegui import ui
@@ -9,91 +9,80 @@ from azursmartmix_control.config import Settings
 
 
 class ControlUI:
-    """NiceGUI frontend that consumes the local FastAPI endpoints."""
+    """NiceGUI panel UI (human-friendly, not raw JSON)."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_base = settings.api_prefix.rstrip("/")
         self.timeout = httpx.Timeout(2.5, connect=1.5)
 
-        self._lbl_docker = None
-        self._lbl_engine = None
-        self._lbl_sched = None
+        self._timer = None
 
-        self._json_status = None
-        self._json_config = None
-        self._json_now = None
-        self._json_upcoming = None
+        # runtime widgets
+        self._rt_docker = None
+        self._rt_engine = None
+        self._rt_sched = None
+
+        self._now_title = None
+        self._up_list = None
 
         self._logs_engine_box = None
         self._logs_sched_box = None
 
-        self._timer = None
-
     def build(self) -> None:
-        ui.page_title("AzurSmartMix Control (read-only)")
+        ui.page_title("AzurSmartMix Control")
 
         with ui.header().classes("items-center justify-between"):
             ui.label("AzurSmartMix Control Plane").classes("text-lg font-bold")
-            ui.label("v1 read-only").classes("text-sm opacity-80")
+            with ui.row().classes("items-center gap-2"):
+                ui.button("Refresh", on_click=self.refresh_all).props("unelevated")
+                ui.button("Auto (2s)", on_click=self.enable_autorefresh).props("outline")
+                ui.button("Stop", on_click=self.disable_autorefresh).props("outline")
 
-        with ui.row().classes("w-full"):
+        with ui.row().classes("w-full gap-4"):
             with ui.card().classes("w-full"):
-                ui.label("Runtime status").classes("text-base font-semibold")
-                with ui.row().classes("items-center gap-6"):
-                    self._lbl_docker = ui.badge("Docker: ?", color="grey")
-                    self._lbl_engine = ui.badge("Engine: ?", color="grey")
-                    self._lbl_sched = ui.badge("Scheduler: ?", color="grey")
-                with ui.row().classes("items-center gap-2"):
-                    ui.button("Refresh", on_click=self.refresh_all).props("outline")
-                    ui.button("Auto-refresh (2s)", on_click=self.enable_autorefresh).props("outline")
-                    ui.button("Stop auto-refresh", on_click=self.disable_autorefresh).props("outline")
+                ui.label("Runtime Status").classes("text-base font-semibold")
+                with ui.row().classes("items-center gap-3"):
+                    self._rt_docker = ui.badge("Docker: ?", color="grey")
+                with ui.row().classes("w-full gap-4"):
+                    self._rt_engine = self._build_runtime_card("Engine")
+                    self._rt_sched = self._build_runtime_card("Scheduler")
 
-                self._json_status = ui.json_editor({"content": {"json": {}}}).classes("w-full")
-
-        with ui.row().classes("w-full"):
+        with ui.row().classes("w-full gap-4"):
             with ui.card().classes("w-1/2"):
-                ui.label("Engine config (docker-compose env)").classes("text-base font-semibold")
-                ui.label(f"Source: {self.settings.compose_path}").classes("text-xs opacity-70")
-                self._json_config = ui.json_editor({"content": {"json": {}}}).classes("w-full")
+                ui.label("Now Playing").classes("text-base font-semibold")
+                self._now_title = ui.label("…").classes("text-xl font-bold mt-2")
+                ui.label(f"Mount: {self.settings.icecast_mount}").classes("text-xs opacity-70 mt-1")
 
             with ui.card().classes("w-1/2"):
-                ui.label("Now / Upcoming").classes("text-base font-semibold")
-                ui.label("Now (Icecast preferred)").classes("text-sm font-semibold mt-2")
-                self._json_now = ui.json_editor({"content": {"json": {}}}).classes("w-full")
-                ui.label("Upcoming (scheduler)").classes("text-sm font-semibold mt-2")
-                self._json_upcoming = ui.json_editor({"content": {"json": {}}}).classes("w-full")
+                ui.label("Upcoming (from engine preprocess log)").classes("text-base font-semibold")
+                self._up_list = ui.column().classes("mt-2 gap-1")
 
-        with ui.row().classes("w-full"):
+        with ui.row().classes("w-full gap-4"):
             with ui.card().classes("w-1/2"):
                 ui.label("Engine logs (tail)").classes("text-base font-semibold")
                 with ui.row().classes("items-center gap-2"):
                     ui.button("Refresh", on_click=self.refresh_engine_logs).props("outline")
-                self._logs_engine_box = ui.textarea(label="", value="").props(
-                    "readonly rows=20"
-                ).classes("w-full font-mono text-xs")
+                self._logs_engine_box = ui.textarea(value="").props("readonly rows=18").classes("w-full font-mono text-xs")
 
             with ui.card().classes("w-1/2"):
                 ui.label("Scheduler logs (tail)").classes("text-base font-semibold")
                 with ui.row().classes("items-center gap-2"):
                     ui.button("Refresh", on_click=self.refresh_scheduler_logs).props("outline")
-                self._logs_sched_box = ui.textarea(label="", value="").props(
-                    "readonly rows=20"
-                ).classes("w-full font-mono text-xs")
+                self._logs_sched_box = ui.textarea(value="").props("readonly rows=18").classes("w-full font-mono text-xs")
 
         ui.timer(0.1, self.refresh_all, once=True)
 
-    def _set_json(self, editor: Any, payload: Dict[str, Any]) -> None:
-        if editor is None:
-            return
-        editor.properties["content"] = {"json": payload}
-        editor.update()
-
-    def _badge_set(self, badge: Any, text: str, color: str) -> None:
-        if badge is None:
-            return
-        badge.set_text(text)
-        badge.props(f"color={color}")
+    def _build_runtime_card(self, title: str):
+        card = ui.card().classes("w-1/2")
+        with card:
+            ui.label(title).classes("text-sm font-semibold opacity-80")
+            name = ui.label("name: …").classes("text-sm")
+            image = ui.label("image: …").classes("text-sm")
+            status = ui.label("status: …").classes("text-sm")
+            health = ui.label("health: …").classes("text-sm")
+            uptime = ui.label("uptime: …").classes("text-sm")
+        return {"card": card, "name": name, "image": image, "status": status, "health": health, "uptime": uptime}
 
     async def _get_json(self, path: str) -> Dict[str, Any]:
         url = f"http://127.0.0.1:{self.settings.ui_port}{self.api_base}{path}"
@@ -110,89 +99,88 @@ class ControlUI:
             r.raise_for_status()
             return r.text
 
+    def _badge_set(self, badge, text: str, color: str) -> None:
+        if badge is None:
+            return
+        badge.set_text(text)
+        badge.props(f"color={color}")
+
     async def refresh_all(self) -> None:
-        await self.refresh_status()
-        await self.refresh_engine_env()
-        await self.refresh_now_upcoming()
+        await self.refresh_runtime()
+        await self.refresh_now()
+        await self.refresh_upcoming()
         await self.refresh_engine_logs()
         await self.refresh_scheduler_logs()
 
-    async def refresh_status(self) -> None:
+    async def refresh_runtime(self) -> None:
         try:
-            data = await self._get_json("/status")
-            self._set_json(self._json_status, data)
-            self._update_badges(data)
+            rt = await self._get_json("/panel/runtime")
         except Exception as e:
-            self._set_json(self._json_status, {"error": str(e)})
-            self._badge_set(self._lbl_docker, "Docker: error", "red")
+            self._badge_set(self._rt_docker, f"Docker: error ({e})", "red")
+            return
 
-    async def refresh_engine_env(self) -> None:
-        try:
-            data = await self._get_json("/compose/engine_env")
-            # Focus UI on the env map directly (more readable)
-            env = data.get("environment") if isinstance(data, dict) else None
-            self._set_json(self._json_config, env if isinstance(env, dict) else data)
-        except Exception as e:
-            self._set_json(self._json_config, {"error": str(e)})
+        docker_ok = bool(rt.get("docker_ping"))
+        self._badge_set(self._rt_docker, f"Docker: {'OK' if docker_ok else 'DOWN'}", "green" if docker_ok else "red")
 
-    async def refresh_now_upcoming(self) -> None:
-        try:
-            now = await self._get_json("/now_playing")
-            self._set_json(self._json_now, now)
-        except Exception as e:
-            self._set_json(self._json_now, {"error": str(e)})
+        self._fill_runtime_card(self._rt_engine, rt.get("engine") or {})
+        self._fill_runtime_card(self._rt_sched, rt.get("scheduler") or {})
 
+    def _fill_runtime_card(self, w: Dict[str, Any], data: Dict[str, Any]) -> None:
+        if not w:
+            return
+        if not data.get("present"):
+            w["name"].set_text(f"name: {data.get('name')}")
+            w["image"].set_text("image: -")
+            w["status"].set_text("status: missing")
+            w["health"].set_text("health: -")
+            w["uptime"].set_text("uptime: -")
+            return
+
+        w["name"].set_text(f"name: {data.get('name')}")
+        w["image"].set_text(f"image: {data.get('image')}")
+        w["status"].set_text(f"status: {data.get('status')}")
+        w["health"].set_text(f"health: {data.get('health') or '-'}")
+        w["uptime"].set_text(f"uptime: {data.get('uptime') or '-'}")
+
+    async def refresh_now(self) -> None:
         try:
-            up = await self._get_json("/scheduler/upcoming?n=10")
-            self._set_json(self._json_upcoming, up)
+            now = await self._get_json("/panel/now")
+            title = now.get("title") or "—"
+            self._now_title.set_text(title)
         except Exception as e:
-            self._set_json(self._json_upcoming, {"error": str(e)})
+            self._now_title.set_text(f"Error: {e}")
+
+    async def refresh_upcoming(self) -> None:
+        try:
+            up = await self._get_json("/panel/upcoming?n=10")
+            titles = up.get("upcoming") or []
+            if not isinstance(titles, list):
+                titles = []
+        except Exception as e:
+            titles = [f"Error: {e}"]
+
+        # clear + rebuild list
+        self._up_list.clear()
+        if not titles:
+            ui.label("—").classes("text-sm opacity-70").bind_parent_to(self._up_list)
+            return
+
+        for i, t in enumerate(titles, start=1):
+            ui.label(f"{i}. {t}").classes("text-sm").bind_parent_to(self._up_list)
 
     async def refresh_engine_logs(self) -> None:
         try:
-            txt = await self._get_text("/logs?service=engine")
-            if self._logs_engine_box:
-                self._logs_engine_box.set_value(txt)
+            txt = await self._get_text("/logs?service=engine&tail=200")
+            self._logs_engine_box.set_value(txt)
         except Exception as e:
-            if self._logs_engine_box:
-                self._logs_engine_box.set_value(f"[ui] error fetching engine logs: {e}\n")
+            self._logs_engine_box.set_value(f"[ui] error: {e}\n")
 
     async def refresh_scheduler_logs(self) -> None:
         try:
-            txt = await self._get_text("/logs?service=scheduler")
-            if self._logs_sched_box:
-                self._logs_sched_box.set_value(txt)
+            txt = await self._get_text("/logs?service=scheduler&tail=200")
+            self._logs_sched_box.set_value(txt)
         except Exception as e:
-            if self._logs_sched_box:
-                self._logs_sched_box.set_value(f"[ui] error fetching scheduler logs: {e}\n")
-
-    def _update_badges(self, data: Dict[str, Any]) -> None:
-        docker_ok = bool(data.get("docker_ping"))
-        self._badge_set(self._lbl_docker, f"Docker: {'OK' if docker_ok else 'DOWN'}", "green" if docker_ok else "red")
-
-        eng = data.get("engine") or {}
-        sch = data.get("scheduler") or {}
-
-        def badge_text(x: Dict[str, Any], label: str) -> str:
-            if not x.get("present"):
-                return f"{label}: missing"
-            st = x.get("status") or "unknown"
-            hl = x.get("health")
-            return f"{label}: {st} / health={hl}" if hl else f"{label}: {st}"
-
-        if eng.get("present") and eng.get("status") == "running":
-            self._badge_set(self._lbl_engine, badge_text(eng, "Engine"), "green")
-        elif not eng.get("present"):
-            self._badge_set(self._lbl_engine, badge_text(eng, "Engine"), "red")
-        else:
-            self._badge_set(self._lbl_engine, badge_text(eng, "Engine"), "orange")
-
-        if sch.get("present") and sch.get("status") == "running":
-            self._badge_set(self._lbl_sched, badge_text(sch, "Scheduler"), "green")
-        elif not sch.get("present"):
-            self._badge_set(self._lbl_sched, badge_text(sch, "Scheduler"), "red")
-        else:
-            self._badge_set(self._lbl_sched, badge_text(sch, "Scheduler"), "orange")
+            self._logs_sched_box.set_value(f"[ui] error: {e}\n")
 
     def enable_autorefresh(self) -> None:
         if self._timer is not None:

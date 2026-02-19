@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     log_tail_lines_default: int = Field(default=400, alias="LOG_TAIL_LINES_DEFAULT")
     log_tail_lines_max: int = Field(default=2000, alias="LOG_TAIL_LINES_MAX")
 
-    ICECAST_PUBLIC_URL: "http://chourmovs.ddnsfree.com:8000/gst-test.mp3"
+    icecast_public_url: str = "http://chourmovs.ddnsfree.com:8000/gst-test.mp3"
 
 def get_settings() -> Settings:
     return Settings()

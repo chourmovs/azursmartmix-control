@@ -9,32 +9,22 @@ from azursmartmix_control.config import Settings
 
 
 class ControlUI:
-    """NiceGUI frontend that consumes the local FastAPI endpoints.
-
-    NiceGUI API notes:
-    - json_editor: mutate editor.properties['content'] then call editor.update() (no args)
-    - badge.set_text(...) returns None (no chaining!)
-    """
+    """NiceGUI frontend that consumes the local FastAPI endpoints."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_base = settings.api_prefix.rstrip("/")
         self.timeout = httpx.Timeout(2.5, connect=1.5)
 
-        self.status_data: Dict[str, Any] = {}
-        self.config_data: Dict[str, Any] = {}
-        self.logs_engine: str = ""
-        self.logs_sched: str = ""
-        self.now_data: Dict[str, Any] = {}
-        self.upcoming_data: Dict[str, Any] = {}
-
         self._lbl_docker = None
         self._lbl_engine = None
         self._lbl_sched = None
+
         self._json_status = None
         self._json_config = None
         self._json_now = None
         self._json_upcoming = None
+
         self._logs_engine_box = None
         self._logs_sched_box = None
 
@@ -54,7 +44,6 @@ class ControlUI:
                     self._lbl_docker = ui.badge("Docker: ?", color="grey")
                     self._lbl_engine = ui.badge("Engine: ?", color="grey")
                     self._lbl_sched = ui.badge("Scheduler: ?", color="grey")
-
                 with ui.row().classes("items-center gap-2"):
                     ui.button("Refresh", on_click=self.refresh_all).props("outline")
                     ui.button("Auto-refresh (2s)", on_click=self.enable_autorefresh).props("outline")
@@ -64,14 +53,15 @@ class ControlUI:
 
         with ui.row().classes("w-full"):
             with ui.card().classes("w-1/2"):
-                ui.label("Config (read-only YAML)").classes("text-base font-semibold")
+                ui.label("Engine config (docker-compose env)").classes("text-base font-semibold")
+                ui.label(f"Source: {self.settings.compose_path}").classes("text-xs opacity-70")
                 self._json_config = ui.json_editor({"content": {"json": {}}}).classes("w-full")
 
             with ui.card().classes("w-1/2"):
-                ui.label("Now / Upcoming (scheduler proxy)").classes("text-base font-semibold")
-                ui.label("Now (best-effort)").classes("text-sm font-semibold mt-2")
+                ui.label("Now / Upcoming").classes("text-base font-semibold")
+                ui.label("Now (Icecast preferred)").classes("text-sm font-semibold mt-2")
                 self._json_now = ui.json_editor({"content": {"json": {}}}).classes("w-full")
-                ui.label("Upcoming").classes("text-sm font-semibold mt-2")
+                ui.label("Upcoming (scheduler)").classes("text-sm font-semibold mt-2")
                 self._json_upcoming = ui.json_editor({"content": {"json": {}}}).classes("w-full")
 
         with ui.row().classes("w-full"):
@@ -100,7 +90,6 @@ class ControlUI:
         editor.update()
 
     def _badge_set(self, badge: Any, text: str, color: str) -> None:
-        """Set badge text + color without chaining (NiceGUI returns None on set_text)."""
         if badge is None:
             return
         badge.set_text(text)
@@ -123,7 +112,7 @@ class ControlUI:
 
     async def refresh_all(self) -> None:
         await self.refresh_status()
-        await self.refresh_config()
+        await self.refresh_engine_env()
         await self.refresh_now_upcoming()
         await self.refresh_engine_logs()
         await self.refresh_scheduler_logs()
@@ -131,33 +120,30 @@ class ControlUI:
     async def refresh_status(self) -> None:
         try:
             data = await self._get_json("/status")
-            self.status_data = data
             self._set_json(self._json_status, data)
             self._update_badges(data)
         except Exception as e:
-            err = {"error": str(e)}
-            self._set_json(self._json_status, err)
+            self._set_json(self._json_status, {"error": str(e)})
             self._badge_set(self._lbl_docker, "Docker: error", "red")
 
-    async def refresh_config(self) -> None:
+    async def refresh_engine_env(self) -> None:
         try:
-            data = await self._get_json("/config")
-            self.config_data = data
-            self._set_json(self._json_config, data)
+            data = await self._get_json("/compose/engine_env")
+            # Focus UI on the env map directly (more readable)
+            env = data.get("environment") if isinstance(data, dict) else None
+            self._set_json(self._json_config, env if isinstance(env, dict) else data)
         except Exception as e:
             self._set_json(self._json_config, {"error": str(e)})
 
     async def refresh_now_upcoming(self) -> None:
         try:
-            now = await self._get_json("/scheduler/now")
-            self.now_data = now
+            now = await self._get_json("/now_playing")
             self._set_json(self._json_now, now)
         except Exception as e:
             self._set_json(self._json_now, {"error": str(e)})
 
         try:
             up = await self._get_json("/scheduler/upcoming?n=10")
-            self.upcoming_data = up
             self._set_json(self._json_upcoming, up)
         except Exception as e:
             self._set_json(self._json_upcoming, {"error": str(e)})
@@ -165,7 +151,6 @@ class ControlUI:
     async def refresh_engine_logs(self) -> None:
         try:
             txt = await self._get_text("/logs?service=engine")
-            self.logs_engine = txt
             if self._logs_engine_box:
                 self._logs_engine_box.set_value(txt)
         except Exception as e:
@@ -175,7 +160,6 @@ class ControlUI:
     async def refresh_scheduler_logs(self) -> None:
         try:
             txt = await self._get_text("/logs?service=scheduler")
-            self.logs_sched = txt
             if self._logs_sched_box:
                 self._logs_sched_box.set_value(txt)
         except Exception as e:

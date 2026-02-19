@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -20,10 +21,20 @@ class ContainerInfo:
 
 
 class DockerClient:
-    """Minimal Docker wrapper focused on read-only introspection."""
+    """Minimal Docker wrapper focused on read-only introspection.
+
+    v1 extras:
+    - best-effort current track extraction from engine logs.
+    """
+
+    # Example line you showed:
+    # TIMING ... | AFT#1 ENTER cur=file:///tmp/...wav pos=... dur=...
+    _RE_CUR = re.compile(r"\bcur=(?P<cur>\S+)")
+    _RE_NEXT = re.compile(r"\bnext=(?P<next>\S+)")
+    _RE_POS = re.compile(r"\bpos=(?P<pos>[0-9.]+)s")
+    _RE_DUR = re.compile(r"\bdur=(?P<dur>[0-9.]+)")
 
     def __init__(self) -> None:
-        # Uses DOCKER_HOST or /var/run/docker.sock by default.
         self.client = docker.from_env()
 
     def ping(self) -> bool:
@@ -100,4 +111,59 @@ class DockerClient:
             "health": info.health,
             "created_at": info.created_at,
             "started_at": info.started_at,
+        }
+
+    def best_effort_now_playing_from_logs(self, engine_container: str, tail: int = 600) -> Dict[str, Any]:
+        """Parse engine logs to infer current track (read-only heuristic).
+
+        We look for the last line containing `cur=...` (your TIMING/AFT lines).
+        """
+        txt = self.tail_logs(engine_container, tail=tail)
+        if not txt or txt.startswith("[control]"):
+            return {
+                "ok": False,
+                "source": "engine_logs",
+                "engine_container": engine_container,
+                "error": txt.strip() if txt else "empty logs",
+            }
+
+        last_cur = None
+        last_next = None
+        last_pos = None
+        last_dur = None
+        last_line = None
+
+        for line in txt.splitlines():
+            m = self._RE_CUR.search(line)
+            if m:
+                last_cur = m.group("cur")
+                last_line = line
+                mpos = self._RE_POS.search(line)
+                if mpos:
+                    last_pos = mpos.group("pos")
+                mdur = self._RE_DUR.search(line)
+                if mdur:
+                    last_dur = mdur.group("dur")
+
+            mn = self._RE_NEXT.search(line)
+            if mn:
+                last_next = mn.group("next")
+
+        if not last_cur:
+            return {
+                "ok": False,
+                "source": "engine_logs",
+                "engine_container": engine_container,
+                "error": "no `cur=` pattern found in tail",
+            }
+
+        return {
+            "ok": True,
+            "source": "engine_logs",
+            "engine_container": engine_container,
+            "current_uri": last_cur,
+            "position_s": float(last_pos) if last_pos is not None else None,
+            "duration_s": float(last_dur) if last_dur is not None else None,
+            "last_next_uri_seen": last_next,
+            "evidence": last_line,
         }

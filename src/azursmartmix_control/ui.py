@@ -162,28 +162,35 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   overflow: auto;
   border: 1px solid var(--az-border);
   border-radius: 10px;
-  background: rgba(0,0,0,.22);
+  background: rgba(0,0,0,.22) !important;
   padding: 10px 12px;
 }
+
+/* hard-kill any inherited pre background (this is your grey culprit) */
+.console-frame * { background: transparent !important; }
+.console-frame pre,
+.console-frame code { background: transparent !important; }
+
 .console-pre{
-  margin: 0;
-  font-family: var(--az-mono);
-  font-size: 12px;
-  line-height: 1.35;
-  color: rgba(255,255,255,.86);
-  white-space: pre-wrap;
-  word-break: break-word;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-family: var(--az-mono) !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  color: rgba(255,255,255,.86) !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
 }
 
 /* tokens */
-.t-dim{ color: rgba(255,255,255,.45); }
-.t-info{ color: rgba(56, 189, 248, .95); }   /* sky */
-.t-warn{ color: rgba(245, 158, 11, .95); }   /* orange */
-.t-err{  color: rgba(239, 68, 68, .95); }    /* red */
-.t-ok{   color: rgba(34, 197, 94, .95); }    /* green */
-.t-vio{  color: rgba(167, 139, 250, .95); }  /* violet */
-.t-cyan{ color: rgba(34, 211, 238, .95); }   /* cyan */
-.t-bold{ font-weight: 900; }
+.t-dim{ color: rgba(255,255,255,.45) !important; }
+.t-info{ color: rgba(56, 189, 248, .95) !important; }
+.t-warn{ color: rgba(245, 158, 11, .95) !important; }
+.t-err{  color: rgba(239, 68, 68, .95) !important; }
+.t-ok{   color: rgba(34, 197, 94, .95) !important; }
+.t-vio{  color: rgba(167, 139, 250, .95) !important; }
+.t-cyan{ color: rgba(34, 211, 238, .95) !important; }
+.t-bold{ font-weight: 900 !important; }
 """
 
 AZURA_JS = r"""
@@ -215,7 +222,6 @@ class ControlUI:
         self._env_frame = None
         self._env_rows: List[Tuple[str, str]] = []
 
-        # logs
         self._log_html_engine = None
         self._log_html_sched = None
 
@@ -359,7 +365,6 @@ class ControlUI:
     _re_uri = re.compile(r"\b(file:///[^ ]+)\b")
 
     def _highlight_logs_html(self, text: str) -> str:
-        # escape first to prevent HTML injection, then do safe replacements
         esc = html.escape(text)
 
         def repl_level(m: re.Match) -> str:
@@ -499,7 +504,6 @@ class ControlUI:
                 )
 
     async def refresh_logs(self) -> None:
-        # engine
         try:
             eng = await self._get_text("/logs?service=engine&tail=200")
             if self._log_html_engine:
@@ -508,7 +512,6 @@ class ControlUI:
             if self._log_html_engine:
                 self._log_html_engine.set_content('<pre class="console-pre">—</pre>')
 
-        # scheduler
         try:
             sch = await self._get_text("/logs?service=scheduler&tail=200")
             if self._log_html_sched:

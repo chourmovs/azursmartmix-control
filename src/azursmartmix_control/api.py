@@ -47,21 +47,10 @@ def create_api(settings: Settings) -> FastAPI:
     def health() -> Dict[str, Any]:
         return {"ok": True}
 
-    # --- raw status (still useful for debug) ---
     @app.get("/status")
     def status() -> Dict[str, Any]:
         return docker_client.runtime_summary(settings.engine_container, settings.scheduler_container)
 
-    # --- compose env ---
-    @app.get("/compose/engine_env")
-    def compose_engine_env() -> Dict[str, Any]:
-        return get_service_env(settings.compose_path, settings.compose_service_engine)
-
-    @app.get("/compose/scheduler_env")
-    def compose_scheduler_env() -> Dict[str, Any]:
-        return get_service_env(settings.compose_path, settings.compose_service_scheduler)
-
-    # --- logs ---
     @app.get("/logs", response_class=PlainTextResponse)
     def logs(
         service: str = Query(..., description="engine|scheduler|<container_name>"),
@@ -79,21 +68,18 @@ def create_api(settings: Settings) -> FastAPI:
 
         return docker_client.tail_logs(name=name, tail=tail_eff)
 
-    # --- scheduler proxy (upcoming still useful) ---
+    # --- scheduler proxy (still useful for /next) ---
     @app.get("/scheduler/upcoming")
     async def scheduler_upcoming(n: int = Query(10, ge=1, le=50)) -> JSONResponse:
         data = await sched.upcoming(n=n)
         return JSONResponse(data)
 
-    # --- icecast ---
-    @app.get("/icecast/now")
-    async def icecast_now() -> JSONResponse:
-        data = await ice.now_playing()
-        return JSONResponse(data)
+    # --- compose env (your "config") ---
+    @app.get("/panel/engine_env")
+    def panel_engine_env() -> Dict[str, Any]:
+        return get_service_env(settings.compose_path, settings.compose_service_engine)
 
-    # =========================
-    # Panel-friendly endpoints
-    # =========================
+    # --- panel runtime ---
     @app.get("/panel/runtime")
     def panel_runtime() -> Dict[str, Any]:
         raw = docker_client.runtime_summary(settings.engine_container, settings.scheduler_container)
@@ -121,22 +107,18 @@ def create_api(settings: Settings) -> FastAPI:
             "scheduler": pack(sch),
         }
 
+    # --- panel now (title only) ---
     @app.get("/panel/now")
     async def panel_now() -> Dict[str, Any]:
         ic = await ice.now_playing()
         title = None
         if isinstance(ic, dict) and ic.get("ok"):
             title = ic.get("title") or (ic.get("raw") or {}).get("title")
-        return {
-            "ok": bool(title),
-            "title": title,
-            "source": "icecast",
-            "mount": settings.icecast_mount,
-        }
+        return {"ok": bool(title), "title": title, "source": "icecast", "mount": settings.icecast_mount}
 
+    # --- panel upcoming (clean titles from preprocess log) ---
     @app.get("/panel/upcoming")
     async def panel_upcoming(n: int = Query(10, ge=1, le=30)) -> Dict[str, Any]:
-        # current title from icecast
         ic = await ice.now_playing()
         current_title = None
         if isinstance(ic, dict) and ic.get("ok"):
@@ -146,7 +128,7 @@ def create_api(settings: Settings) -> FastAPI:
             engine_container=settings.engine_container,
             current_title=current_title,
             n=n,
-            tail=2000,
+            tail=2500,
         )
         return upcoming
 

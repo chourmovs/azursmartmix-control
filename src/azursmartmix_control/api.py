@@ -3,36 +3,14 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-import yaml
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from azursmartmix_control.config import Settings
 from azursmartmix_control.docker_client import DockerClient
 from azursmartmix_control.scheduler_client import SchedulerClient
-
-
-def _read_text_file(path: str, max_bytes: int = 256_000) -> Dict[str, Any]:
-    """Read file as text (best-effort), bounded for safety."""
-    if not path:
-        return {"present": False, "path": path, "raw_text": None, "error": "empty path"}
-
-    if not os.path.exists(path):
-        return {"present": False, "path": path, "raw_text": None, "error": "not found"}
-
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(max_bytes + 1)
-        truncated = len(raw) > max_bytes
-        if truncated:
-            raw = raw[:max_bytes]
-        try:
-            txt = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            txt = raw.decode("utf-8", errors="replace")
-        return {"present": True, "path": path, "raw_text": txt, "truncated": truncated, "error": None}
-    except Exception as e:
-        return {"present": True, "path": path, "raw_text": None, "error": f"read failed: {e}"}
+from azursmartmix_control.compose_reader import get_service_env
+from azursmartmix_control.icecast_client import IcecastClient
 
 
 def create_api(settings: Settings) -> FastAPI:
@@ -40,8 +18,17 @@ def create_api(settings: Settings) -> FastAPI:
     app = FastAPI(title="AzurSmartMix Control API", version="0.1.0")
 
     docker_client = DockerClient()
+
     now_ep = os.getenv("SCHED_NOW_ENDPOINT", "").strip() or None
     sched = SchedulerClient(settings.sched_base_url, now_endpoint=now_ep)
+
+    ice = IcecastClient(
+        scheme=settings.icecast_scheme,
+        host=settings.icecast_host,
+        port=settings.icecast_port,
+        status_path=settings.icecast_status_path,
+        mount=settings.icecast_mount,
+    )
 
     @app.get("/health")
     def health() -> Dict[str, Any]:
@@ -51,49 +38,20 @@ def create_api(settings: Settings) -> FastAPI:
     def status() -> Dict[str, Any]:
         return docker_client.runtime_summary(settings.engine_container, settings.scheduler_container)
 
-    @app.get("/config")
-    def read_config() -> Dict[str, Any]:
-        """
-        Read config.yml in read-only mode.
+    # --- compose env (your "config") ---
+    @app.get("/compose/env")
+    def compose_env(service: str = Query(..., description="docker-compose service name")) -> Dict[str, Any]:
+        return get_service_env(settings.compose_path, service)
 
-        Important: never 500 in v1.
-        - returns parse_ok=false + raw_text + error when YAML is invalid
-        """
-        base = _read_text_file(settings.config_path)
-        if not base.get("present") or base.get("raw_text") is None:
-            return {
-                "present": bool(base.get("present")),
-                "path": base.get("path"),
-                "parse_ok": False,
-                "data": None,
-                "raw_text": base.get("raw_text"),
-                "error": base.get("error"),
-                "truncated": base.get("truncated", False),
-            }
+    @app.get("/compose/engine_env")
+    def compose_engine_env() -> Dict[str, Any]:
+        return get_service_env(settings.compose_path, settings.compose_service_engine)
 
-        raw_text = base["raw_text"]
-        try:
-            data = yaml.safe_load(raw_text)
-            return {
-                "present": True,
-                "path": base.get("path"),
-                "parse_ok": True,
-                "data": data,
-                "raw_text": raw_text,
-                "error": None,
-                "truncated": base.get("truncated", False),
-            }
-        except Exception as e:
-            return {
-                "present": True,
-                "path": base.get("path"),
-                "parse_ok": False,
-                "data": None,
-                "raw_text": raw_text,
-                "error": f"YAML parse error: {e}",
-                "truncated": base.get("truncated", False),
-            }
+    @app.get("/compose/scheduler_env")
+    def compose_scheduler_env() -> Dict[str, Any]:
+        return get_service_env(settings.compose_path, settings.compose_service_scheduler)
 
+    # --- logs ---
     @app.get("/logs", response_class=PlainTextResponse)
     def logs(
         service: str = Query(..., description="engine|scheduler|<container_name>"),
@@ -111,14 +69,10 @@ def create_api(settings: Settings) -> FastAPI:
 
         return docker_client.tail_logs(name=name, tail=tail_eff)
 
+    # --- scheduler proxy ---
     @app.get("/scheduler/health")
     async def scheduler_health() -> JSONResponse:
         data = await sched.health()
-        return JSONResponse(data)
-
-    @app.get("/scheduler/now")
-    async def scheduler_now() -> JSONResponse:
-        data = await sched.now_playing()
         return JSONResponse(data)
 
     @app.get("/scheduler/upcoming")
@@ -126,10 +80,20 @@ def create_api(settings: Settings) -> FastAPI:
         data = await sched.upcoming(n=n)
         return JSONResponse(data)
 
-    @app.get("/now_playing")
-    def now_playing() -> JSONResponse:
-        """Best-effort now playing inferred from engine logs."""
-        data = docker_client.best_effort_now_playing_from_logs(settings.engine_container)
+    # --- now playing ---
+    @app.get("/icecast/now")
+    async def icecast_now() -> JSONResponse:
+        data = await ice.now_playing()
         return JSONResponse(data)
+
+    @app.get("/now_playing")
+    async def now_playing() -> JSONResponse:
+        """Unified now playing: prefer Icecast (authoritative), fallback to engine logs."""
+        ice_data = await ice.now_playing()
+        if isinstance(ice_data, dict) and ice_data.get("ok"):
+            return JSONResponse({"ok": True, "preferred": "icecast", "icecast": ice_data})
+
+        log_data = docker_client.best_effort_now_playing_from_logs(settings.engine_container)
+        return JSONResponse({"ok": bool(log_data.get("ok")), "preferred": "engine_logs", "icecast": ice_data, "engine_logs": log_data})
 
     return app

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -68,18 +68,15 @@ def create_api(settings: Settings) -> FastAPI:
 
         return docker_client.tail_logs(name=name, tail=tail_eff)
 
-    # --- scheduler proxy (still useful for /next) ---
     @app.get("/scheduler/upcoming")
     async def scheduler_upcoming(n: int = Query(10, ge=1, le=50)) -> JSONResponse:
         data = await sched.upcoming(n=n)
         return JSONResponse(data)
 
-    # --- compose env (your "config") ---
     @app.get("/panel/engine_env")
     def panel_engine_env() -> Dict[str, Any]:
         return get_service_env(settings.compose_path, settings.compose_service_engine)
 
-    # --- panel runtime ---
     @app.get("/panel/runtime")
     def panel_runtime() -> Dict[str, Any]:
         raw = docker_client.runtime_summary(settings.engine_container, settings.scheduler_container)
@@ -107,33 +104,18 @@ def create_api(settings: Settings) -> FastAPI:
             "scheduler": pack(sch),
         }
 
-    # --- panel now (Icecast title + infer playlist from scheduler NEXT log) ---
     @app.get("/panel/now")
     async def panel_now() -> Dict[str, Any]:
+        # 1) observed title from Icecast
         ic = await ice.now_playing()
-        title = None
+        title_observed = None
         if isinstance(ic, dict) and ic.get("ok"):
-            title = ic.get("title") or (ic.get("raw") or {}).get("title")
+            title_observed = ic.get("title") or (ic.get("raw") or {}).get("title")
 
-        # infer playlist from scheduler logs by matching normalized title
-        pl = docker_client.infer_playlist_for_title_from_scheduler(
-            scheduler_container=settings.scheduler_container,
-            current_title=title,
-            tail=2500,
-        )
-        playlist = pl.get("playlist") if isinstance(pl, dict) else None
-
-        # anticipation hint: engine STREAM_START seen recently?
-        ss = docker_client.last_engine_stream_start(
-            engine_container=settings.engine_container,
-            tail=800,
-            recent_window_s=10,
-        )
-
-        # predicted next: take first upcoming from scheduler NEXT (best user-aligned semantics)
+        # 2) scheduler-based predicted_next (best semantic for “what should be next”)
         up = docker_client.compute_upcoming_from_scheduler_next(
             scheduler_container=settings.scheduler_container,
-            current_title=title,
+            current_title=title_observed,
             n=5,
             tail=2500,
         )
@@ -143,18 +125,52 @@ def create_api(settings: Settings) -> FastAPI:
             if isinstance(lst, list) and lst:
                 predicted_next = lst[0]
 
+        # 3) engine STREAM_START hint (low-latency transition marker)
+        ss = docker_client.last_engine_stream_start(
+            engine_container=settings.engine_container,
+            tail=900,
+            recent_window_s=12,
+        )
+
+        # 4) default: infer playlist by matching observed title to scheduler NEXT
+        pl_observed = docker_client.infer_playlist_for_title_from_scheduler(
+            scheduler_container=settings.scheduler_container,
+            current_title=title_observed,
+            tail=2500,
+        )
+        playlist_observed = pl_observed.get("playlist") if isinstance(pl_observed, dict) else None
+
+        # 5) optimistic now playing: if STREAM_START is recent and predicted_next exists,
+        # we display predicted_next as “effective now” to avoid 1-track UI lag.
+        now_mode = "observed"
+        title_effective = title_observed
+        playlist_effective = playlist_observed
+
+        if (
+            isinstance(ss, dict)
+            and ss.get("ok")
+            and ss.get("recent")
+            and isinstance(predicted_next, dict)
+            and predicted_next.get("title")
+        ):
+            title_effective = predicted_next.get("title_display") or docker_client.display_title(str(predicted_next.get("title")))
+            playlist_effective = predicted_next.get("playlist") or playlist_effective
+            now_mode = "optimistic"
+
         return {
-            "ok": bool(title),
-            "title": title,
-            "playlist": playlist,
-            "source": "icecast+scheduler_logs",
+            "ok": bool(title_effective),
             "mount": settings.icecast_mount,
-            "scheduler_match": pl.get("match") if isinstance(pl, dict) else None,
+            "source": "icecast+scheduler_logs+engine_hint",
+            "now_mode": now_mode,
+            "title_effective": title_effective,
+            "playlist_effective": playlist_effective,
+            "title_observed": title_observed,
+            "playlist_observed": playlist_observed,
+            "scheduler_match_observed": pl_observed.get("match") if isinstance(pl_observed, dict) else None,
             "engine_stream_start": ss,
             "predicted_next": predicted_next,
         }
 
-    # --- panel upcoming (from scheduler NEXT log + playlist) ---
     @app.get("/panel/upcoming")
     async def panel_upcoming(n: int = Query(10, ge=1, le=30)) -> Dict[str, Any]:
         ic = await ice.now_playing()
@@ -162,7 +178,6 @@ def create_api(settings: Settings) -> FastAPI:
         if isinstance(ic, dict) and ic.get("ok"):
             current_title = ic.get("title")
 
-        # Primary: scheduler NEXT lines (you asked to drive upcoming from this)
         upcoming_sched = docker_client.compute_upcoming_from_scheduler_next(
             scheduler_container=settings.scheduler_container,
             current_title=current_title,
@@ -170,7 +185,6 @@ def create_api(settings: Settings) -> FastAPI:
             tail=2500,
         )
 
-        # Secondary/compat: old engine preprocess list (titles only) kept as extra info
         upcoming_engine = docker_client.compute_upcoming_from_preprocess(
             engine_container=settings.engine_container,
             current_title=current_title,
@@ -178,9 +192,6 @@ def create_api(settings: Settings) -> FastAPI:
             tail=2500,
         )
 
-        # Provide both representations:
-        # - upcoming: list[{title,playlist,ts}] from scheduler
-        # - upcoming_titles: list[str] for old UI patterns / debugging
         upcoming_list: List[Dict[str, Any]] = []
         if isinstance(upcoming_sched, dict) and upcoming_sched.get("ok"):
             u = upcoming_sched.get("upcoming") or []

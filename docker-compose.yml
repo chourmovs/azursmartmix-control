@@ -11,6 +11,8 @@ services:
       API_PREFIX: "/api"
       LOG_TAIL_LINES_DEFAULT: "400"
       LOG_TAIL_LINES_MAX: "2000"
+      AZURSMARTMIX_REPO: "chourmovs/azursmartmix"
+      AZURSMARTMIX_IMAGE: "chourmovs/azursmartmix:beta1"   # fallback par défaut
 
       COMPOSE_PATH: "/compose/docker-compose.yml"
       COMPOSE_SERVICE_ENGINE: "azursmartmix_engine"

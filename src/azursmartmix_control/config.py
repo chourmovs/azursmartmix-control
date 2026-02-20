@@ -5,7 +5,7 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
-    """Runtime settings for the control plane (v1 read-only)."""
+    """Runtime settings for the control plane."""
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
@@ -39,7 +39,13 @@ class Settings(BaseSettings):
     log_tail_lines_default: int = Field(default=400, alias="LOG_TAIL_LINES_DEFAULT")
     log_tail_lines_max: int = Field(default=2000, alias="LOG_TAIL_LINES_MAX")
 
-    icecast_public_url: str = "http://chourmovs.ddnsfree.com:8000/gst-test.mp3"
+    # Public stream URL (UI player)
+    icecast_public_url: str = Field(default="http://chourmovs.ddnsfree.com:8000/gst-test.mp3", alias="ICECAST_PUBLIC_URL")
+
+    # --- NEW: host project directory + image tag for update ---
+    azuramix_dir: str = Field(default="/var/azuramix", alias="AZURAMIX_DIR")
+    azursmartmix_image: str = Field(default="chourmovs/azursmartmix:beta1", alias="AZURSMARTMIX_IMAGE")
+
 
 def get_settings() -> Settings:
     return Settings()

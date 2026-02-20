@@ -42,9 +42,16 @@ class Settings(BaseSettings):
     # Public stream URL (UI player)
     icecast_public_url: str = Field(default="http://chourmovs.ddnsfree.com:8000/gst-test.mp3", alias="ICECAST_PUBLIC_URL")
 
-    # --- NEW: host project directory + image tag for update ---
+    # Host project directory
     azuramix_dir: str = Field(default="/var/azuramix", alias="AZURAMIX_DIR")
+
+    # Default image ref (fallback for update)
+    # You can set: AZURSMARTMIX_IMAGE=chourmovs/azursmartmix:beta1
     azursmartmix_image: str = Field(default="chourmovs/azursmartmix:beta1", alias="AZURSMARTMIX_IMAGE")
+
+    # NEW: base repo for dynamic tag selection (recommended)
+    # Example: AZURSMARTMIX_REPO=chourmovs/azursmartmix
+    azursmartmix_repo: str = Field(default="chourmovs/azursmartmix", alias="AZURSMARTMIX_REPO")
 
 
 def get_settings() -> Settings:

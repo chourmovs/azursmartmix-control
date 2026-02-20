@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple
 
 import html
 import re
+import urllib.parse
 
 import httpx
 from nicegui import ui
@@ -229,7 +230,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   font-family: var(--az-mono);
 }
 
-/* meta rows */
 .np-meta{
   margin-top: 8px;
   display:flex;
@@ -267,7 +267,8 @@ class ControlUI:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_base = settings.api_prefix.rstrip("/")
-        self.timeout = httpx.Timeout(10.0, connect=2.0)  # ops can take longer
+        self.timeout = httpx.Timeout(30.0, connect=3.0)
+
         self._timer = None
 
         self._docker_badge = None
@@ -287,16 +288,18 @@ class ControlUI:
         self._log_html_engine = None
         self._log_html_sched = None
 
-        # NEW: ops modal
         self._ops_dialog = None
         self._ops_html = None
         self._ops_busy = False
 
-        # NEW: header buttons refs (to disable while running)
         self._btn_down = None
         self._btn_up = None
         self._btn_recreate = None
         self._btn_update = None
+
+        # NEW: selected tag
+        self._tag_select = None
+        self._tag_value = None  # type: ignore[assignment]
 
     def _stream_public_url(self) -> str:
         public = getattr(self.settings, "icecast_public_url", "") or ""
@@ -311,6 +314,13 @@ class ControlUI:
             mount = "/" + str(mount)
         return f"{scheme}://{host}:{port}{mount}"
 
+    def _default_tag_from_image(self) -> str:
+        # Try to extract tag from AZURSMARTMIX_IMAGE (repo:tag)
+        s = (self.settings.azursmartmix_image or "").strip()
+        if ":" in s:
+            return s.rsplit(":", 1)[1].strip() or "latest"
+        return "latest"
+
     def build(self) -> None:
         ui.add_head_html(f"<style>{AZURA_CSS}</style>")
         ui.add_head_html(f"<script>{AZURA_JS}</script>")
@@ -324,7 +334,19 @@ class ControlUI:
                 ui.label("AzurSmartMix Control").classes("az-sub text-sm")
 
             with ui.row().classes("items-center gap-2 az-opbtn"):
-                # NEW: ops buttons (compose control)
+                # NEW: tag selector for Update
+                default_tag = self._default_tag_from_image()
+                self._tag_value = default_tag
+
+                # narrow options: user can also type; but NiceGUI select doesn't support free text everywhere.
+                # We provide common tags and an "other" input in the modal console (optional).
+                self._tag_select = ui.select(
+                    options=["latest", "beta1", "beta2", "rc", "dev"],
+                    value=default_tag,
+                    label="Tag",
+                    on_change=self._on_tag_change,
+                ).props("dense outlined").style("min-width: 140px;")
+
                 self._btn_up = ui.button("Start", on_click=self.op_compose_up).props("unelevated color=positive")
                 self._btn_down = ui.button("Stop", on_click=self.op_compose_down).props("unelevated color=negative")
                 self._btn_recreate = ui.button("Recreate", on_click=self.op_compose_recreate).props("unelevated color=warning")
@@ -332,7 +354,6 @@ class ControlUI:
 
                 ui.separator().props("vertical").style("height:26px; opacity:.35;")
 
-                # Existing controls
                 ui.button("Refresh", on_click=self.refresh_all).props("unelevated color=white text-color=primary")
                 ui.button("Auto 5s", on_click=self.enable_autorefresh).props("outline")
                 ui.button("Stop Auto", on_click=self.disable_autorefresh).props("outline")
@@ -349,6 +370,13 @@ class ControlUI:
 
         ui.timer(0.1, self.refresh_all, once=True)
 
+    def _on_tag_change(self, e) -> None:
+        # e.value holds the new selection
+        try:
+            self._tag_value = str(e.value).strip()
+        except Exception:
+            self._tag_value = self._default_tag_from_image()
+
     # -------------------- Ops modal + API calls --------------------
 
     def _build_ops_dialog(self) -> None:
@@ -360,11 +388,15 @@ class ControlUI:
                     ui.button("Close", on_click=d.close).props("outline")
                 with ui.element("div").classes("az-card-b"):
                     ui.label(f"cwd: {self.settings.azuramix_dir}").style("font-family: var(--az-mono); font-size: 12px; opacity:.85;")
-                    ui.label(f"image: {self.settings.azursmartmix_image}").style("font-family: var(--az-mono); font-size: 12px; opacity:.65; margin-top: 2px;")
+
+                    # repo + tag (computed)
+                    ui.label(
+                        f"repo: {self.settings.azursmartmix_repo} | tag: {self._default_tag_from_image()}"
+                    ).style("font-family: var(--az-mono); font-size: 12px; opacity:.65; margin-top: 2px;")
+
                     ui.separator().style("opacity:.25; margin: 10px 0;")
                     with ui.element("div").classes("console-frame").style("height: 520px;"):
                         self._ops_html = ui.html('<div class="console-content">—</div>')
-        # no return
 
     async def _post_text(self, path: str) -> str:
         url = f"http://127.0.0.1:{self.settings.ui_port}{self.api_base}{path}"
@@ -378,11 +410,16 @@ class ControlUI:
         for b in (self._btn_down, self._btn_up, self._btn_recreate, self._btn_update):
             if b:
                 b.disable() if busy else b.enable()
+        if self._tag_select:
+            self._tag_select.disable() if busy else self._tag_select.enable()
 
     def _highlight_ops_html(self, text: str) -> str:
-        # Reuse log highlighting heuristics for ops console
         esc = html.escape(text)
-        esc = re.sub(r"\bok:\s*(True|False)\b", lambda m: f'<span class="t-bold {"t-ok" if m.group(1)=="True" else "t-err"}">ok: {m.group(1)}</span>', esc)
+        esc = re.sub(
+            r"\bok:\s*(True|False)\b",
+            lambda m: f'<span class="t-bold {"t-ok" if m.group(1)=="True" else "t-err"}">ok: {m.group(1)}</span>',
+            esc,
+        )
         esc = re.sub(r"\brc:\s*(\d+)\b", lambda m: f'<span class="t-dim">rc: {m.group(1)}</span>', esc)
         esc = re.sub(r"\b(stdout|stderr)\b", lambda m: f'<span class="t-vio t-bold">{m.group(1)}</span>', esc)
         esc = re.sub(r"\bdocker\b", lambda m: f'<span class="t-cyan t-bold">{m.group(0)}</span>', esc, flags=re.IGNORECASE)
@@ -427,7 +464,12 @@ class ControlUI:
         await self._run_op("Recreate (up -d --force-recreate)", "/ops/compose/recreate")
 
     async def op_compose_update(self) -> None:
-        await self._run_op("Update (down + image rm)", "/ops/compose/update")
+        tag = str(self._tag_value or "").strip()
+        # If empty, backend will fallback to AZURSMARTMIX_IMAGE
+        qs = ""
+        if tag:
+            qs = "?tag=" + urllib.parse.quote(tag, safe="")
+        await self._run_op(f"Update (down + rm image:{tag or 'default'})", "/ops/compose/update" + qs)
 
     # -------------------- Existing UI cards --------------------
 

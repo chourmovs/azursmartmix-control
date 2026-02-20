@@ -104,63 +104,105 @@ def create_api(settings: Settings) -> FastAPI:
             "scheduler": pack(sch),
         }
 
+    def _compute_effective_now_and_upcoming(
+        title_observed: Optional[str],
+        upcoming_sched: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Fix 1-track lag:
+        - Icecast observed title may be behind.
+        - Scheduler NEXT list often contains the *real* current track as first item.
+        Rule:
+        - If upcoming[0] exists AND it does not match observed (normalized),
+          promote upcoming[0] as effective now, and upcoming list starts at upcoming[1].
+        """
+        observed_norm = docker_client.normalize_title(title_observed or "")
+        upcoming_list = []
+        if isinstance(upcoming_sched, dict) and upcoming_sched.get("ok"):
+            u = upcoming_sched.get("upcoming") or []
+            if isinstance(u, list):
+                upcoming_list = [x for x in u if isinstance(x, dict)]
+
+        effective_now = None
+        effective_upcoming = upcoming_list
+
+        if upcoming_list:
+            first = upcoming_list[0]
+            first_title_raw = str(first.get("title") or "")
+            first_norm = docker_client.normalize_title(first_title_raw)
+
+            # Promote if observed is empty OR observed != first upcoming (normalized)
+            if (not observed_norm) or (first_norm and first_norm != observed_norm):
+                effective_now = first
+                effective_upcoming = upcoming_list[1:]
+
+        return {
+            "observed_norm": observed_norm,
+            "effective_now": effective_now,
+            "effective_upcoming": effective_upcoming,
+            "raw_upcoming": upcoming_list,
+        }
+
     @app.get("/panel/now")
     async def panel_now() -> Dict[str, Any]:
-        # 1) observed title from Icecast
+        # 1) observed title from Icecast (can lag)
         ic = await ice.now_playing()
         title_observed = None
         if isinstance(ic, dict) and ic.get("ok"):
             title_observed = ic.get("title") or (ic.get("raw") or {}).get("title")
 
-        # 2) scheduler-based predicted_next (best semantic for “what should be next”)
-        up = docker_client.compute_upcoming_from_scheduler_next(
+        # 2) scheduler upcoming (title+playlist) computed relative to observed
+        upcoming_sched = docker_client.compute_upcoming_from_scheduler_next(
             scheduler_container=settings.scheduler_container,
             current_title=title_observed,
-            n=5,
-            tail=2500,
+            n=12,
+            tail=3000,
         )
-        predicted_next = None
-        if isinstance(up, dict) and up.get("ok"):
-            lst = up.get("upcoming") or []
-            if isinstance(lst, list) and lst:
-                predicted_next = lst[0]
 
-        # 3) engine STREAM_START hint (low-latency transition marker)
+        # 3) engine STREAM_START hint (kept for debugging/UI hinting)
         ss = docker_client.last_engine_stream_start(
             engine_container=settings.engine_container,
-            tail=900,
+            tail=1000,
             recent_window_s=12,
         )
 
-        # 4) default: infer playlist by matching observed title to scheduler NEXT
+        # 4) observed playlist inference (best-effort)
         pl_observed = docker_client.infer_playlist_for_title_from_scheduler(
             scheduler_container=settings.scheduler_container,
             current_title=title_observed,
-            tail=2500,
+            tail=3000,
         )
         playlist_observed = pl_observed.get("playlist") if isinstance(pl_observed, dict) else None
 
-        # 5) optimistic now playing: if STREAM_START is recent and predicted_next exists,
-        # we display predicted_next as “effective now” to avoid 1-track UI lag.
+        # 5) effective-now fix (promote upcoming[0] if Icecast lags)
+        eff = _compute_effective_now_and_upcoming(title_observed, upcoming_sched)
+        effective_now = eff.get("effective_now")
+
         now_mode = "observed"
         title_effective = title_observed
         playlist_effective = playlist_observed
 
-        if (
-            isinstance(ss, dict)
-            and ss.get("ok")
-            and ss.get("recent")
-            and isinstance(predicted_next, dict)
-            and predicted_next.get("title")
-        ):
-            title_effective = predicted_next.get("title_display") or docker_client.display_title(str(predicted_next.get("title")))
-            playlist_effective = predicted_next.get("playlist") or playlist_effective
-            now_mode = "optimistic"
+        predicted_next = None
+        if effective_now and isinstance(effective_now, dict):
+            # effective_now becomes authoritative for what user hears *now*
+            title_effective = effective_now.get("title_display") or docker_client.display_title(str(effective_now.get("title") or ""))
+            playlist_effective = effective_now.get("playlist") or playlist_effective
+            now_mode = "promoted_from_upcoming"
+
+            # predicted next becomes the first item of effective_upcoming (if any)
+            effective_upcoming = eff.get("effective_upcoming") or []
+            if isinstance(effective_upcoming, list) and effective_upcoming:
+                predicted_next = effective_upcoming[0]
+        else:
+            # No promotion happened; predicted next is first raw upcoming if present
+            raw_up = eff.get("raw_upcoming") or []
+            if isinstance(raw_up, list) and raw_up:
+                predicted_next = raw_up[0]
 
         return {
             "ok": bool(title_effective),
             "mount": settings.icecast_mount,
-            "source": "icecast+scheduler_logs+engine_hint",
+            "source": "icecast(observed)+scheduler(NEXT)+engine(hint)",
             "now_mode": now_mode,
             "title_effective": title_effective,
             "playlist_effective": playlist_effective,
@@ -169,35 +211,46 @@ def create_api(settings: Settings) -> FastAPI:
             "scheduler_match_observed": pl_observed.get("match") if isinstance(pl_observed, dict) else None,
             "engine_stream_start": ss,
             "predicted_next": predicted_next,
+            "debug": {
+                "observed_norm": eff.get("observed_norm"),
+                "upcoming_primary_source": upcoming_sched.get("source") if isinstance(upcoming_sched, dict) else None,
+                "upcoming_count_raw": len(eff.get("raw_upcoming") or []),
+                "promoted": bool(effective_now),
+            },
         }
 
     @app.get("/panel/upcoming")
     async def panel_upcoming(n: int = Query(10, ge=1, le=30)) -> Dict[str, Any]:
+        # 1) observed title from Icecast (can lag)
         ic = await ice.now_playing()
         current_title = None
         if isinstance(ic, dict) and ic.get("ok"):
             current_title = ic.get("title")
 
+        # 2) scheduler NEXT list (primary)
         upcoming_sched = docker_client.compute_upcoming_from_scheduler_next(
             scheduler_container=settings.scheduler_container,
             current_title=current_title,
-            n=n,
-            tail=2500,
+            n=max(12, n + 2),  # ensure we have enough after promotion
+            tail=3000,
         )
 
+        # 3) apply same promotion logic so upcoming list aligns with what user hears now
+        eff = _compute_effective_now_and_upcoming(current_title, upcoming_sched)
+        effective_upcoming = eff.get("effective_upcoming") or []
+        if not isinstance(effective_upcoming, list):
+            effective_upcoming = []
+
+        # truncate to requested n
+        effective_upcoming = effective_upcoming[:n]
+
+        # 4) Secondary debug/compat: engine preprocess (titles only)
         upcoming_engine = docker_client.compute_upcoming_from_preprocess(
             engine_container=settings.engine_container,
             current_title=current_title,
             n=n,
             tail=2500,
         )
-
-        upcoming_list: List[Dict[str, Any]] = []
-        if isinstance(upcoming_sched, dict) and upcoming_sched.get("ok"):
-            u = upcoming_sched.get("upcoming") or []
-            if isinstance(u, list):
-                upcoming_list = [x for x in u if isinstance(x, dict)]
-
         upcoming_titles: List[str] = []
         if isinstance(upcoming_engine, dict) and upcoming_engine.get("ok"):
             u2 = upcoming_engine.get("upcoming") or []
@@ -206,14 +259,19 @@ def create_api(settings: Settings) -> FastAPI:
 
         return {
             "ok": True,
+            "current_title_observed": current_title,
             "source": {
                 "primary": upcoming_sched.get("source") if isinstance(upcoming_sched, dict) else None,
                 "secondary": upcoming_engine.get("source") if isinstance(upcoming_engine, dict) else None,
             },
-            "current_title": current_title,
-            "upcoming": upcoming_list,
+            # This is what UI should display:
+            "upcoming": effective_upcoming,
+            # kept for older UI/debug:
             "upcoming_titles": upcoming_titles,
             "debug": {
+                "observed_norm": eff.get("observed_norm"),
+                "promoted_now": eff.get("effective_now"),
+                "raw_upcoming_head": (eff.get("raw_upcoming") or [])[:3],
                 "scheduler": upcoming_sched,
                 "engine_preprocess": upcoming_engine,
             },

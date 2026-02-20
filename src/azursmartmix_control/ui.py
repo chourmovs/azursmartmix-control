@@ -34,12 +34,10 @@ AZURA_CSS = r"""
   --grid-gap: 18px;
 }
 
-/* Global: never allow light backgrounds to leak */
 html, body { background: var(--az-bg) !important; color: var(--az-text) !important; font-family: var(--az-font) !important; }
 .q-page-container, .q-layout, .q-page { background: var(--az-bg) !important; }
 .q-card, .q-table__container, .q-menu, .q-dialog__inner, .q-drawer { background: transparent !important; }
 
-/* Nuke Quasar panel/tabs backgrounds */
 .q-tab-panels,
 .q-tab-panel,
 .q-panel,
@@ -51,7 +49,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   background: transparent !important;
 }
 
-/* Some NiceGUI HTML wrapper can have background */
 .q-html,
 .q-html * {
   background: transparent !important;
@@ -109,7 +106,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-item .idx{ display:inline-block; min-width:24px; font-weight:950; color: rgba(255,255,255,.75); }
 .az-item .txt{ font-weight:650; }
 
-/* ===== Runtime tables ===== */
 .rt-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 900px){ .rt-grid{ grid-template-columns: 1fr; } }
 
@@ -135,7 +131,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .rt-k{ width: 140px; color: var(--az-muted); }
 .rt-v{ color: rgba(255,255,255,.92); font-family: var(--az-mono); word-break: break-word; }
 
-/* ===== Engine env viewer ===== */
 .env-toolbar{ display:flex; gap:10px; align-items:center; margin-bottom: 10px; }
 .env-search input{ font-family: var(--az-mono) !important; }
 .env-frame{
@@ -175,7 +170,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .env-frame::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.22); border-radius: 10px; }
 .env-frame::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.34); }
 
-/* ===== Console viewer ===== */
 .console-frame{
   height: 420px;
   overflow: auto;
@@ -197,7 +191,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   padding: 0 !important;
 }
 
-/* tokens */
 .t-dim{ color: rgba(255,255,255,.45) !important; }
 .t-info{ color: rgba(56, 189, 248, .95) !important; }
 .t-warn{ color: rgba(245, 158, 11, .95) !important; }
@@ -207,7 +200,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .t-cyan{ color: rgba(34, 211, 238, .95) !important; }
 .t-bold{ font-weight: 900 !important; }
 
-/* ===== HTML5 audio player ===== */
 .az-player{
   width: 100%;
   margin-top: 10px;
@@ -219,7 +211,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-player audio{
   width: 100%;
   height: 42px;
-  filter: invert(1) hue-rotate(180deg) saturate(1.2); /* make native controls "dark-ish" */
+  filter: invert(1) hue-rotate(180deg) saturate(1.2);
   opacity: 0.95;
 }
 .az-player .hint{
@@ -227,6 +219,28 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   font-size: 12px;
   color: rgba(255,255,255,.65);
   font-family: var(--az-mono);
+}
+
+/* small "meta" rows under Now Playing */
+.np-meta{
+  margin-top: 8px;
+  display:flex;
+  flex-direction:column;
+  gap: 6px;
+}
+.np-line{
+  font-family: var(--az-mono);
+  font-size: 12px;
+  color: rgba(255,255,255,.80);
+}
+.np-k{ color: rgba(255,255,255,.55); }
+.np-v{ color: rgba(255,255,255,.92); font-weight: 800; }
+.np-pill{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border:1px solid var(--az-border);
+  background: rgba(255,255,255,.05);
 }
 """
 
@@ -253,6 +267,7 @@ class ControlUI:
         self._rt_sched_tbl = None
 
         self._now_title = None
+        self._now_meta = None
         self._now_player = None
 
         self._up_list_container = None
@@ -265,7 +280,6 @@ class ControlUI:
         self._log_html_sched = None
 
     def _stream_public_url(self) -> str:
-        # Prefer explicit env var if present in Settings (backward-compatible if not)
         public = getattr(self.settings, "icecast_public_url", "") or ""
         public = str(public).strip()
         if public:
@@ -365,10 +379,47 @@ class ControlUI:
             with ui.element("div").classes("az-card-b"):
                 self._now_title = ui.label("—").classes("text-xl").style("font-weight: 950; margin: 2px 0 0 0;")
 
+                # meta (playlist, predicted next, stream-start hint)
+                self._now_meta = ui.html(self._now_meta_html({}))
+
                 # HTML5 player
                 self._now_player = ui.html(self._player_html(stream_url))
 
-                ui.label("Icecast metadata (title only)").style("font-size: 12px; opacity:.7; margin-top: 10px;")
+                ui.label("Sources: Icecast title + scheduler NEXT (playlist) + engine STREAM_START (hint)").style(
+                    "font-size: 12px; opacity:.7; margin-top: 10px;"
+                )
+
+    def _now_meta_html(self, now: Dict[str, Any]) -> str:
+        playlist = now.get("playlist")
+        predicted = now.get("predicted_next") if isinstance(now.get("predicted_next"), dict) else None
+        ss = now.get("engine_stream_start") if isinstance(now.get("engine_stream_start"), dict) else None
+
+        pl_txt = html.escape(str(playlist)) if playlist else "—"
+
+        pred_txt = "—"
+        pred_pl = "—"
+        if predicted:
+            pred_txt = html.escape(str(predicted.get("title") or "—"))
+            pred_pl = html.escape(str(predicted.get("playlist") or "—"))
+
+        hint = ""
+        if ss and ss.get("ok") and ss.get("recent"):
+            age = ss.get("age_s")
+            age_txt = f"{age}s" if isinstance(age, int) else "recent"
+            hint = f'<span class="np-pill"><span class="t-ok t-bold">STREAM_START</span><span class="t-dim">({html.escape(age_txt)})</span></span>'
+        elif ss and ss.get("ok") and ss.get("line"):
+            age = ss.get("age_s")
+            age_txt = f"{age}s" if isinstance(age, int) else ""
+            hint = f'<span class="np-pill"><span class="t-dim">last STREAM_START</span><span class="t-dim">{html.escape(age_txt)}</span></span>'
+
+        return (
+            '<div class="np-meta">'
+            f'  <div class="np-line"><span class="np-k">playlist:</span> <span class="np-v" data-copy="{pl_txt}">{pl_txt}</span></div>'
+            f'  <div class="np-line"><span class="np-k">next(pred):</span> <span class="np-v" data-copy="{pred_txt}">{pred_txt}</span>'
+            f'    <span class="t-dim">|</span> <span class="np-k">pl:</span> <span class="np-v" data-copy="{pred_pl}">{pred_pl}</span></div>'
+            f'  <div class="np-line">{hint}</div>'
+            '</div>'
+        )
 
     def _player_html(self, url: str) -> str:
         u = html.escape(url)
@@ -385,7 +436,7 @@ class ControlUI:
         with ui.element("div").classes("az-card"):
             with ui.element("div").classes("az-card-h"):
                 ui.label("Upcoming")
-                ui.label("from engine preprocess log").classes("text-xs").style("opacity:.85;")
+                ui.label("from scheduler NEXT log").classes("text-xs").style("opacity:.85;")
             with ui.element("div").classes("az-card-b"):
                 self._up_list_container = ui.element("div").classes("az-list")
 
@@ -434,6 +485,7 @@ class ControlUI:
     _re_aft = re.compile(r"\bAFT#\d+\b")
     _re_icecast = re.compile(r"\b(Icecast|ICECAST|/status-json\.xsl|mount|listeners?)\b", re.IGNORECASE)
     _re_uri = re.compile(r"\b(file:///[^ ]+)\b")
+    _re_stream_start = re.compile(r"\bBUS\s+STREAM_START\b", re.IGNORECASE)
 
     def _highlight_logs_html(self, text: str) -> str:
         esc = html.escape(text)
@@ -456,6 +508,7 @@ class ControlUI:
         esc = self._re_bridge.sub(r'<span class="t-vio">bridgeplan:</span>', esc)
         esc = self._re_aft.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
         esc = self._re_icecast.sub(lambda m: f'<span class="t-cyan">{m.group(0)}</span>', esc)
+        esc = self._re_stream_start.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
         esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
 
         return f'<div class="console-content">{esc}</div>'
@@ -548,30 +601,43 @@ class ControlUI:
         try:
             now = await self._get_json("/panel/now")
             self._now_title.set_text(now.get("title") or "—")
+            if self._now_meta:
+                self._now_meta.set_content(self._now_meta_html(now if isinstance(now, dict) else {}))
         except Exception:
             self._now_title.set_text("—")
+            if self._now_meta:
+                self._now_meta.set_content(self._now_meta_html({}))
 
     async def refresh_upcoming(self) -> None:
         if self._up_list_container is None:
             return
         try:
             up = await self._get_json("/panel/upcoming?n=10")
-            titles = up.get("upcoming") or []
-            if not isinstance(titles, list):
-                titles = []
+            items = up.get("upcoming") or []
+            if not isinstance(items, list):
+                items = []
         except Exception:
-            titles = []
+            items = []
 
         self._up_list_container.clear()
         with self._up_list_container:
-            if not titles:
+            if not items:
                 ui.html('<div style="opacity:.7; font-size: 12px;">—</div>')
                 return
-            for i, t in enumerate(titles, start=1):
-                t_safe = html.escape(str(t))
+            for i, it in enumerate(items, start=1):
+                if not isinstance(it, dict):
+                    continue
+                title = html.escape(str(it.get("title") or "—"))
+                playlist = html.escape(str(it.get("playlist") or "—"))
+                ts = html.escape(str(it.get("ts") or ""))
+                tail = f' <span class="t-dim">[{ts}]</span>' if ts else ""
                 ui.html(
                     f'<div class="az-item"><span class="idx">{i}.</span> '
-                    f'<span class="txt" data-copy="{t_safe}">{t_safe}</span></div>'
+                    f'<span class="txt" data-copy="{title}">{title}</span> '
+                    f'<span class="t-dim">|</span> '
+                    f'<span class="t-cyan t-bold" data-copy="{playlist}">{playlist}</span>'
+                    f'{tail}'
+                    f'</div>'
                 )
 
     async def refresh_logs(self) -> None:

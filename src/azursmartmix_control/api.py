@@ -6,11 +6,16 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from azursmartmix_control.config import Settings
 from azursmartmix_control.docker_client import DockerClient
 from azursmartmix_control.scheduler_client import SchedulerClient
-from azursmartmix_control.compose_reader import get_service_env
+from azursmartmix_control.compose_reader import (
+    get_service_env,
+    get_service_env_from_host_compose,
+    set_service_env_in_host_compose,
+)
 from azursmartmix_control.icecast_client import IcecastClient
 
 
@@ -68,20 +73,18 @@ _RE_SAFE_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def _build_image_ref(settings: Settings, tag: Optional[str]) -> str:
-    """Build docker image ref for update.
-
-    Priority:
-    1) tag provided => <AZURSMARTMIX_REPO>:<tag>
-    2) fallback => AZURSMARTMIX_IMAGE (already includes tag)
-    """
     if tag:
         t = tag.strip()
         if not _RE_SAFE_TAG.match(t):
-            # hard safety: refuse shell-ish tags
             raise ValueError(f"invalid tag: {tag!r}")
         repo = (settings.azursmartmix_repo or "").strip() or "chourmovs/azursmartmix"
         return f"{repo}:{t}"
     return (settings.azursmartmix_image or "chourmovs/azursmartmix:latest").strip()
+
+
+class ComposeEnvSaveRequest(BaseModel):
+    environment: Dict[str, str] = Field(default_factory=dict)
+    env_format_prefer: str = Field(default="dict", description="dict|list")
 
 
 def create_api(settings: Settings) -> FastAPI:
@@ -144,7 +147,6 @@ def create_api(settings: Settings) -> FastAPI:
 
     @app.post("/ops/compose/update", response_class=PlainTextResponse)
     def ops_compose_update(tag: Optional[str] = Query(default=None, description="image tag e.g. latest, beta1")) -> str:
-        # Validate + build image ref
         try:
             image_ref = _build_image_ref(settings, tag)
         except Exception as e:
@@ -165,6 +167,26 @@ def create_api(settings: Settings) -> FastAPI:
         lines.append(f"image_ref: {image_ref}")
         lines.append(f"overall_ok: {bool(r.get('ok'))}")
         return "\n".join(lines).strip() + "\n"
+
+    # ------------------- NEW: Compose env editor (host compose) -------------------
+
+    @app.get("/compose/engine_env")
+    def compose_engine_env() -> Dict[str, Any]:
+        data = get_service_env_from_host_compose(settings.azuramix_compose_file, settings.compose_service_engine)
+        data["restart_required"] = False
+        return data
+
+    @app.post("/compose/engine_env")
+    def compose_engine_env_save(req: ComposeEnvSaveRequest) -> Dict[str, Any]:
+        r = set_service_env_in_host_compose(
+            host_compose_path=settings.azuramix_compose_file,
+            service_name=settings.compose_service_engine,
+            env_map=req.environment or {},
+            env_format_prefer=(req.env_format_prefer or "dict"),
+        )
+        r["restart_required"] = True
+        r["message"] = "Saved. Need to restart to take effect."
+        return r
 
     # ------------------- Existing endpoints -------------------
 
@@ -203,6 +225,8 @@ def create_api(settings: Settings) -> FastAPI:
             "engine": pack(eng),
             "scheduler": pack(sch),
         }
+
+    # --- (tout le reste de ton API existante inchangée) ---
 
     def _compute_effective_now_and_upcoming(
         title_observed: Optional[str],

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple
 
 import html
 import re
@@ -55,6 +55,48 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   background: transparent !important;
 }
 
+/* ------------------------------------------------------------
+   FORCE QUASAR INPUTS TO BE DARK (fix "black text" everywhere)
+   ------------------------------------------------------------ */
+.q-field__native,
+.q-field__input,
+.q-field__prefix,
+.q-field__suffix,
+.q-field__label,
+.q-field__bottom,
+.q-field__messages,
+.q-placeholder,
+.q-field__native::placeholder,
+.q-field__input::placeholder {
+  color: rgba(255,255,255,.92) !important;
+}
+
+.q-field--outlined .q-field__control:before,
+.q-field--outlined .q-field__control:after {
+  border-color: rgba(255,255,255,.20) !important;
+}
+
+.q-field--outlined .q-field__control,
+.q-field__control {
+  background: rgba(0,0,0,.18) !important;
+}
+
+.q-field__marginal,
+.q-select__dropdown-icon,
+.q-icon {
+  color: rgba(255,255,255,.78) !important;
+}
+
+.q-menu,
+.q-list,
+.q-item,
+.q-item__label {
+  background: #151a22 !important;
+  color: rgba(255,255,255,.92) !important;
+}
+
+/* ------------------------------------------------------------ */
+
 .az-topbar{
   background: linear-gradient(0deg, var(--az-blue) 0%, var(--az-blue-dark) 100%) !important;
   color: white !important;
@@ -99,9 +141,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-dot.ok{ background: var(--az-green); }
 .az-dot.err{ background: var(--az-red); }
 .az-dot.warn{ background: var(--az-orange); }
-
-.az-actions .q-btn{ border-radius: 10px !important; font-weight: 900 !important; text-transform:none !important; }
-.az-actions .q-btn--outline{ border:1px solid rgba(255,255,255,.55) !important; color:white !important; }
 
 .az-opbtn .q-btn{
   border-radius: 10px !important;
@@ -272,24 +311,51 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   margin-bottom: 10px;
 }
 
+/* ROW internal layout (KEY/VALUE/DEL) */
 .az-editor-grid{
   display:grid;
-  grid-template-columns: 360px 1fr 52px;
+  grid-template-columns: 1fr 1fr 52px;
   gap: 10px;
 }
-@media (max-width: 1200px){ .az-editor-grid{ grid-template-columns: 1fr; } }
-
 .az-editor-grid input{
   font-family: var(--az-mono) !important;
 }
 
+/* The row itself */
 .az-editor-row{
-  padding: 8px;
+  padding: 10px;
   border-radius: 10px;
   border: 1px solid rgba(255,255,255,.08);
   background: rgba(255,255,255,.04);
 }
+
+/* ------------------------------------------------------------
+   MULTI-COLUMN LAYOUT FOR COMPOSE ENV TABLE (centered, equal width)
+   ------------------------------------------------------------ */
+.az-env-grid{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(420px, 1fr));
+  gap: 12px;
+  justify-content: center;   /* centers the whole grid */
+  align-items: start;
+}
+
+@media (max-width: 1550px){
+  .az-env-grid{ grid-template-columns: repeat(2, minmax(420px, 1fr)); }
+}
+@media (max-width: 1050px){
+  .az-env-grid{ grid-template-columns: 1fr; }
+}
+
+/* Ensure inputs are readable even if Quasar tries to be clever */
+.az-inp .q-field__native,
+.az-inp .q-field__input,
+.az-inp input{
+  color: rgba(255,255,255,.92) !important;
+  font-family: var(--az-mono) !important;
+}
 """
+
 
 AZURA_JS = r"""
 document.addEventListener('click', (ev) => {
@@ -339,16 +405,13 @@ class ControlUI:
         self._tag_select = None
         self._tag_value = None  # type: ignore[assignment]
 
-        # header restart hint
         self._restart_needed = False
         self._restart_badge = None
 
-        # tabs
         self._tabs = None
         self._tab_dashboard = "Dashboard"
         self._tab_compose = "Compose Env"
 
-        # compose env editor
         self._compose_env_frame = None
         self._compose_env_rows_container = None
         self._compose_env_rows: List[Dict[str, Any]] = []
@@ -385,8 +448,6 @@ class ControlUI:
             with ui.row().classes("items-center gap-3"):
                 ui.label("azuracast").classes("az-brand text-xl")
                 ui.label("AzurSmartMix Control").classes("az-sub text-sm")
-
-                # restart-needed badge (hidden by default)
                 self._restart_badge = ui.html("").classes("ml-2")
 
             with ui.row().classes("items-center gap-2 az-opbtn"):
@@ -398,7 +459,7 @@ class ControlUI:
                     value=default_tag,
                     label="Tag",
                     on_change=self._on_tag_change,
-                ).props("dense outlined").style("min-width: 140px;")
+                ).props("dense outlined dark").style("min-width: 140px;")
 
                 self._btn_up = ui.button("Start", on_click=self.op_compose_up).props("unelevated color=positive")
                 self._btn_down = ui.button("Stop", on_click=self.op_compose_down).props("unelevated color=negative")
@@ -412,7 +473,6 @@ class ControlUI:
                 ui.button("Stop Auto", on_click=self.disable_autorefresh).props("outline")
 
         with ui.element("div").classes("az-wrap"):
-            # main tabs (IMPORTANT: tabs must contain its children inside "with")
             with ui.element("div").classes("az-tabsbar"):
                 with ui.tabs().classes("w-full") as self._tabs:
                     ui.tab(self._tab_dashboard)
@@ -591,7 +651,7 @@ class ControlUI:
                 ui.label(self.settings.compose_service_engine).classes("text-xs").style("opacity:.85;")
             with ui.element("div").classes("az-card-b"):
                 with ui.element("div").classes("env-toolbar"):
-                    self._env_search = ui.input(placeholder="Filter (key/value)…").classes("env-search").props("dense outlined")
+                    self._env_search = ui.input(placeholder="Filter (key/value)…").classes("env-search az-inp").props("dense outlined dark")
                     ui.button("Clear", on_click=self._env_clear_filter).props("outline")
                 self._env_frame = ui.element("div").classes("env-frame")
 
@@ -664,7 +724,6 @@ class ControlUI:
                 ui.label("Logs")
                 ui.label("tail=200").classes("text-xs").style("opacity:.85;")
             with ui.element("div").classes("az-card-b"):
-                # IMPORTANT: tabs must contain ui.tab children inside "with"
                 with ui.tabs().classes("w-full") as tabs:
                     ui.tab("engine")
                     ui.tab("scheduler")
@@ -699,7 +758,8 @@ class ControlUI:
                         "font-size: 12px; opacity:.75; margin-bottom: 10px;"
                     )
 
-                    self._compose_env_rows_container = ui.element("div").classes("az-list")
+                    # IMPORTANT: this container is now a grid (3 cols -> 2 cols -> 1 col)
+                    self._compose_env_rows_container = ui.element("div").classes("az-env-grid")
 
     def _compose_env_add_row(self) -> None:
         self._compose_env_rows.append({"k": "", "v": "", "k_in": None, "v_in": None, "rm_btn": None})
@@ -718,8 +778,9 @@ class ControlUI:
             for idx, row in enumerate(self._compose_env_rows):
                 with ui.element("div").classes("az-editor-row"):
                     with ui.element("div").classes("az-editor-grid"):
-                        k_in = ui.input(value=str(row.get("k", "")), placeholder="KEY").props("dense outlined")
-                        v_in = ui.input(value=str(row.get("v", "")), placeholder="VALUE").props("dense outlined")
+                        # Force Quasar dark inputs + ensure readability
+                        k_in = ui.input(value=str(row.get("k", "")), placeholder="KEY").classes("az-inp").props("dense outlined dark")
+                        v_in = ui.input(value=str(row.get("v", "")), placeholder="VALUE").classes("az-inp").props("dense outlined dark")
 
                         def make_rm(i: int):
                             def _rm():

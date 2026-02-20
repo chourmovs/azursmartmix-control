@@ -4,7 +4,7 @@ import datetime as dt
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import docker
 from docker.errors import DockerException, NotFound
@@ -21,6 +21,15 @@ class ContainerInfo:
     started_at: Optional[str]
 
 
+@dataclass(frozen=True)
+class NextEntry:
+    ts_raw: str
+    ts: Optional[dt.datetime]
+    title_raw: str
+    title_norm: str
+    playlist: str
+
+
 class DockerClient:
     """Read-only Docker wrapper for control-plane introspection.
 
@@ -28,6 +37,11 @@ class DockerClient:
     - container status summary (age/uptime)
     - parse engine logs to extract *human titles* from 'preprocess:' lines
       and compute "upcoming" after the current track (Icecast title).
+
+    v1.1 (incremental):
+    - parse scheduler logs to extract NEXT entries: title + playlist
+    - match current Icecast title to a scheduler NEXT entry to infer playlist for "Now Playing"
+    - parse engine logs for BUS STREAM_START src=playbin to expose a "next-imminent" hint
     """
 
     _RE_PREPROCESS = re.compile(r"\bpreprocess:\s*(?P<rest>.+?)\s*$", re.IGNORECASE)
@@ -35,6 +49,16 @@ class DockerClient:
     _RE_SAFE_ARROW = re.compile(r"\s*->\s*safe_[0-9a-f]{8,}\.wav\b", re.IGNORECASE)
     _RE_PAREN_TRAIL = re.compile(r"\s*\(.*\)\s*$")
     _RE_EXT = re.compile(r"\.(mp3|wav|flac|ogg|m4a|aac)\s*$", re.IGNORECASE)
+
+    # ---- scheduler NEXT parsing (your requested source of truth for upcoming + playlist) ----
+    # Example:
+    # 2026-02-20 12:12:58,106 INFO azurmixd.scheduler - NEXT | title="vanzo_-_me_and_you" | playlist="Promotion"
+    _RE_SCHED_NEXT = re.compile(
+        r"""^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+.*?\bNEXT\s*\|\s*title="(?P<title>[^"]*)"\s*\|\s*playlist="(?P<playlist>[^"]*)"""  # noqa: E501
+    )
+
+    # ---- engine STREAM_START parsing (hint to avoid "one track late" UI feeling) ----
+    _RE_STREAM_START = re.compile(r"\bBUS\s+STREAM_START\b.*\bsrc=playbin\b", re.IGNORECASE)
 
     def __init__(self) -> None:
         self.client = docker.from_env()
@@ -143,6 +167,14 @@ class DockerClient:
             return None
 
     @staticmethod
+    def _parse_sched_ts(ts: str) -> Optional[dt.datetime]:
+        """Parse scheduler log timestamp 'YYYY-MM-DD HH:MM:SS,mmm' as naive datetime."""
+        try:
+            return dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S,%f")
+        except Exception:
+            return None
+
+    @staticmethod
     def _dedupe_keep_order(items: List[str]) -> List[str]:
         seen = set()
         out: List[str] = []
@@ -153,44 +185,52 @@ class DockerClient:
             out.append(x)
         return out
 
-    def _clean_preprocess_title(self, rest: str) -> Optional[str]:
-        """Convert 'preprocess:' payload into a clean 'Artist - Title' string.
+    # ----------------------- Normalization helpers (scheduler ↔ icecast matching) -----------------------
 
-        Input examples:
-          "1. Daddy Freddy & Tenor Fly - Go Freddy Go.mp3 -> safe_xxx.wav (silence=... LUFS ...)"
-          "derrick_howard_-_behold_i_live_[1973].mp3 -> safe_....wav (...)"
+    @staticmethod
+    def normalize_title(s: str) -> str:
+        """Normalize titles so scheduler 'vanzo_-_me_and_you' can match Icecast 'Vanzo - Me And You'.
 
-        Output:
-          "Daddy Freddy & Tenor Fly - Go Freddy Go"
-          "derrick howard - behold i live [1973]" (underscores -> spaces)
+        Policy:
+        - lower
+        - basename only
+        - strip extension
+        - replace '_-_' with ' - '
+        - underscores -> spaces
+        - collapse whitespace
         """
+        if not s:
+            return ""
+        s = s.strip()
+        s = os.path.basename(s)
+        s = re.sub(r"\.(mp3|wav|flac|ogg|m4a|aac)$", "", s, flags=re.IGNORECASE)
+        s = s.replace("_-_", " - ")
+        s = s.replace("_", " ")
+        s = re.sub(r"\s+", " ", s).strip().lower()
+        return s
+
+    # ----------------------- Engine preprocess (existing behavior) -----------------------
+
+    def _clean_preprocess_title(self, rest: str) -> Optional[str]:
+        """Convert 'preprocess:' payload into a clean 'Artist - Title' string."""
         s = (rest or "").strip()
         if not s:
             return None
 
-        # Remove leading index "1. "
         s = self._RE_LEADING_IDX.sub("", s).strip()
 
-        # If it contains "-> safe_xxx.wav", keep only left side
         if "->" in s:
             left = s.split("->", 1)[0].strip()
             s = left
 
-        # Remove trailing parenthetical leftovers (just in case)
         s = self._RE_PAREN_TRAIL.sub("", s).strip()
-
-        # Keep basename if it's a path
         s = os.path.basename(s)
-
-        # Remove extension
         s = self._RE_EXT.sub("", s).strip()
 
-        # Normalize underscores to spaces
         s = s.replace("_-_", " - ")
         s = s.replace("_", " ")
         s = re.sub(r"\s+", " ", s).strip()
 
-        # If still empty, drop
         return s or None
 
     def extract_preprocess_titles(self, engine_container: str, tail: int = 2500) -> Dict[str, Any]:
@@ -230,12 +270,7 @@ class DockerClient:
         n: int = 10,
         tail: int = 2500,
     ) -> Dict[str, Any]:
-        """Compute upcoming titles from preprocess logs after current_title.
-
-        - Find LAST occurrence of current_title in the cleaned preprocess sequence
-        - Return the next unique titles (keep order) limited to n
-        - If not found: fallback to last chunk as "best effort"
-        """
+        """Compute upcoming titles from preprocess logs after current_title."""
         data = self.extract_preprocess_titles(engine_container, tail=tail)
         if not data.get("ok"):
             return {"ok": False, "error": data.get("error"), "upcoming": [], "source": "engine_logs"}
@@ -273,4 +308,210 @@ class DockerClient:
             "current_title_found": True,
             "current_title": current_title,
             "upcoming": chunk2[:n],
+        }
+
+    # ----------------------- Scheduler NEXT (new) -----------------------
+
+    def extract_scheduler_next_entries(self, scheduler_container: str, tail: int = 2500) -> Dict[str, Any]:
+        """Extract NEXT entries (title + playlist) from scheduler logs."""
+        txt = self.tail_logs(scheduler_container, tail=tail)
+        if not txt or txt.startswith("[control]"):
+            return {
+                "ok": False,
+                "source": "scheduler_logs",
+                "scheduler_container": scheduler_container,
+                "error": txt.strip() if txt else "empty logs",
+                "entries": [],
+            }
+
+        entries: List[NextEntry] = []
+        for line in txt.splitlines():
+            m = self._RE_SCHED_NEXT.match(line.strip())
+            if not m:
+                continue
+            ts_raw = m.group("ts") or ""
+            title_raw = m.group("title") or ""
+            playlist = m.group("playlist") or ""
+            title_norm = self.normalize_title(title_raw)
+            entries.append(
+                NextEntry(
+                    ts_raw=ts_raw,
+                    ts=self._parse_sched_ts(ts_raw),
+                    title_raw=title_raw,
+                    title_norm=title_norm,
+                    playlist=playlist,
+                )
+            )
+
+        return {
+            "ok": True,
+            "source": "scheduler_logs",
+            "scheduler_container": scheduler_container,
+            "count": len(entries),
+            "entries": [
+                {
+                    "ts": e.ts_raw,
+                    "title": e.title_raw,
+                    "title_norm": e.title_norm,
+                    "playlist": e.playlist,
+                }
+                for e in entries
+            ],
+        }
+
+    def infer_playlist_for_title_from_scheduler(
+        self,
+        scheduler_container: str,
+        current_title: Optional[str],
+        tail: int = 2500,
+    ) -> Dict[str, Any]:
+        """Infer playlist for the *current* Icecast title by matching it against scheduler NEXT entries."""
+        cur_norm = self.normalize_title(current_title or "")
+        data = self.extract_scheduler_next_entries(scheduler_container, tail=tail)
+        if not data.get("ok"):
+            return {"ok": False, "error": data.get("error"), "playlist": None, "match": None}
+
+        entries = data.get("entries") or []
+        if not cur_norm or not entries:
+            return {"ok": True, "playlist": None, "match": None, "current_title": current_title, "current_norm": cur_norm}
+
+        # last match wins (closest in time)
+        match = None
+        for e in reversed(entries):
+            if (e.get("title_norm") or "") == cur_norm:
+                match = e
+                break
+
+        if not match:
+            return {"ok": True, "playlist": None, "match": None, "current_title": current_title, "current_norm": cur_norm}
+
+        return {
+            "ok": True,
+            "playlist": match.get("playlist"),
+            "match": match,
+            "current_title": current_title,
+            "current_norm": cur_norm,
+        }
+
+    def compute_upcoming_from_scheduler_next(
+        self,
+        scheduler_container: str,
+        current_title: Optional[str],
+        n: int = 10,
+        tail: int = 2500,
+    ) -> Dict[str, Any]:
+        """Compute upcoming entries from scheduler NEXT log after current_title (title+playlist).
+
+        Strategy:
+        - parse all NEXT lines (in order of log appearance)
+        - find LAST occurrence of current_title (normalized)
+        - return subsequent unique titles (keep first playlist encountered for each title)
+        - fallback: last chunk
+        """
+        cur_norm = self.normalize_title(current_title or "")
+        data = self.extract_scheduler_next_entries(scheduler_container, tail=tail)
+        if not data.get("ok"):
+            return {"ok": False, "error": data.get("error"), "upcoming": [], "source": "scheduler_logs"}
+
+        raw_entries = data.get("entries") or []
+        if not raw_entries:
+            return {"ok": False, "error": "no scheduler NEXT entries found", "upcoming": [], "source": "scheduler_logs"}
+
+        # locate start index
+        start_idx = None
+        if cur_norm:
+            for i in range(len(raw_entries) - 1, -1, -1):
+                if (raw_entries[i].get("title_norm") or "") == cur_norm:
+                    start_idx = i + 1
+                    break
+
+        seq = raw_entries[start_idx:] if start_idx is not None else raw_entries[-(n * 6) :]
+
+        # dedupe by normalized title, keep order, keep first playlist for that title
+        seen: set[str] = set()
+        out: List[Dict[str, Any]] = []
+        for e in seq:
+            tn = (e.get("title_norm") or "").strip()
+            if not tn or tn in seen:
+                continue
+            seen.add(tn)
+            out.append(
+                {
+                    "title": e.get("title"),
+                    "playlist": e.get("playlist"),
+                    "ts": e.get("ts"),
+                }
+            )
+            if len(out) >= n:
+                break
+
+        return {
+            "ok": True,
+            "source": "scheduler_logs_after_current" if start_idx is not None else "scheduler_logs_fallback_tail",
+            "current_title_found": start_idx is not None,
+            "current_title": current_title,
+            "upcoming": out,
+        }
+
+    # ----------------------- Engine STREAM_START (new) -----------------------
+
+    def last_engine_stream_start(
+        self,
+        engine_container: str,
+        tail: int = 800,
+        recent_window_s: int = 10,
+    ) -> Dict[str, Any]:
+        """Return last BUS STREAM_START src=playbin line and whether it looks 'recent' (heuristic)."""
+        txt = self.tail_logs(engine_container, tail=tail)
+        if not txt or txt.startswith("[control]"):
+            return {
+                "ok": False,
+                "source": "engine_logs",
+                "engine_container": engine_container,
+                "error": txt.strip() if txt else "empty logs",
+                "line": None,
+                "recent": False,
+            }
+
+        last_line = None
+        last_ts = None
+
+        # best-effort parse: we assume the line begins with "YYYY-MM-DD HH:MM:SS,mmm"
+        for line in txt.splitlines():
+            if not self._RE_STREAM_START.search(line):
+                continue
+            last_line = line.strip()
+            m = re.match(r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+", last_line)
+            if m:
+                last_ts = self._parse_sched_ts(m.group("ts"))
+
+        if not last_line:
+            return {
+                "ok": True,
+                "source": "engine_logs",
+                "engine_container": engine_container,
+                "line": None,
+                "recent": False,
+            }
+
+        # recency heuristic: compare to "now" in local naive time
+        recent = False
+        age_s = None
+        if last_ts:
+            try:
+                now_local = dt.datetime.now()
+                age_s = int((now_local - last_ts).total_seconds())
+                recent = age_s >= 0 and age_s <= int(recent_window_s)
+            except Exception:
+                recent = False
+
+        return {
+            "ok": True,
+            "source": "engine_logs",
+            "engine_container": engine_container,
+            "line": last_line,
+            "ts": last_ts.isoformat() if last_ts else None,
+            "age_s": age_s,
+            "recent": recent,
+            "recent_window_s": int(recent_window_s),
         }

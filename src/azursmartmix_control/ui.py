@@ -221,7 +221,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   font-family: var(--az-mono);
 }
 
-/* small "meta" rows under Now Playing */
+/* meta rows */
 .np-meta{
   margin-top: 8px;
   display:flex;
@@ -318,8 +318,6 @@ class ControlUI:
 
         ui.timer(0.1, self.refresh_all, once=True)
 
-    # ---------- Cards ----------
-
     def _card_runtime(self) -> None:
         with ui.element("div").classes("az-card"):
             with ui.element("div").classes("az-card-h"):
@@ -378,30 +376,26 @@ class ControlUI:
                 ui.label(str(mount)).classes("text-xs").style("opacity:.85;")
             with ui.element("div").classes("az-card-b"):
                 self._now_title = ui.label("—").classes("text-xl").style("font-weight: 950; margin: 2px 0 0 0;")
-
-                # meta (playlist, predicted next, stream-start hint)
                 self._now_meta = ui.html(self._now_meta_html({}))
-
-                # HTML5 player
                 self._now_player = ui.html(self._player_html(stream_url))
-
-                ui.label("Sources: Icecast title + scheduler NEXT (playlist) + engine STREAM_START (hint)").style(
+                ui.label("Sources: Icecast(observed) + scheduler NEXT + engine STREAM_START hint").style(
                     "font-size: 12px; opacity:.7; margin-top: 10px;"
                 )
 
     def _now_meta_html(self, now: Dict[str, Any]) -> str:
-        playlist = now.get("playlist")
+        now_mode = now.get("now_mode") or "observed"
+
+        playlist_eff = now.get("playlist_effective")
+        pl_txt = html.escape(str(playlist_eff)) if playlist_eff else "—"
+
         predicted = now.get("predicted_next") if isinstance(now.get("predicted_next"), dict) else None
-        ss = now.get("engine_stream_start") if isinstance(now.get("engine_stream_start"), dict) else None
-
-        pl_txt = html.escape(str(playlist)) if playlist else "—"
-
-        pred_txt = "—"
+        pred_title = "—"
         pred_pl = "—"
         if predicted:
-            pred_txt = html.escape(str(predicted.get("title") or "—"))
+            pred_title = html.escape(str(predicted.get("title_display") or predicted.get("title") or "—"))
             pred_pl = html.escape(str(predicted.get("playlist") or "—"))
 
+        ss = now.get("engine_stream_start") if isinstance(now.get("engine_stream_start"), dict) else None
         hint = ""
         if ss and ss.get("ok") and ss.get("recent"):
             age = ss.get("age_s")
@@ -412,11 +406,22 @@ class ControlUI:
             age_txt = f"{age}s" if isinstance(age, int) else ""
             hint = f'<span class="np-pill"><span class="t-dim">last STREAM_START</span><span class="t-dim">{html.escape(age_txt)}</span></span>'
 
+        obs = ""
+        if now_mode == "optimistic":
+            title_obs = html.escape(str(now.get("title_observed") or "—"))
+            pl_obs = html.escape(str(now.get("playlist_observed") or "—"))
+            obs = (
+                f'<div class="np-line"><span class="np-k">observed:</span> '
+                f'<span class="t-dim" data-copy="{title_obs}">{title_obs}</span> '
+                f'<span class="t-dim">|</span> <span class="t-dim" data-copy="{pl_obs}">{pl_obs}</span></div>'
+            )
+
         return (
             '<div class="np-meta">'
             f'  <div class="np-line"><span class="np-k">playlist:</span> <span class="np-v" data-copy="{pl_txt}">{pl_txt}</span></div>'
-            f'  <div class="np-line"><span class="np-k">next(pred):</span> <span class="np-v" data-copy="{pred_txt}">{pred_txt}</span>'
+            f'  <div class="np-line"><span class="np-k">next(pred):</span> <span class="np-v" data-copy="{pred_title}">{pred_title}</span>'
             f'    <span class="t-dim">|</span> <span class="np-k">pl:</span> <span class="np-v" data-copy="{pred_pl}">{pred_pl}</span></div>'
+            f'  {obs}'
             f'  <div class="np-line">{hint}</div>'
             '</div>'
         )
@@ -458,8 +463,6 @@ class ControlUI:
                         with ui.element("div").classes("console-frame").style("background: rgba(0,0,0,.55) !important;"):
                             self._log_html_sched = ui.html('<div class="console-content">—</div>')
 
-    # ---------- HTTP helpers ----------
-
     async def _get_json(self, path: str) -> Dict[str, Any]:
         url = f"http://127.0.0.1:{self.settings.ui_port}{self.api_base}{path}"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -474,8 +477,6 @@ class ControlUI:
             r = await client.get(url)
             r.raise_for_status()
             return r.text
-
-    # ---------- Log highlight ----------
 
     _re_level = re.compile(r"\b(INFO|WARN|WARNING|ERROR|CRITICAL|DEBUG)\b")
     _re_engine_tag = re.compile(r"\bazurmixd\.engine\b")
@@ -512,8 +513,6 @@ class ControlUI:
         esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
 
         return f'<div class="console-content">{esc}</div>'
-
-    # ---------- Refresh ----------
 
     async def refresh_all(self) -> None:
         await self.refresh_runtime()
@@ -600,7 +599,8 @@ class ControlUI:
     async def refresh_now(self) -> None:
         try:
             now = await self._get_json("/panel/now")
-            self._now_title.set_text(now.get("title") or "—")
+            title = now.get("title_effective") or now.get("title_observed") or "—"
+            self._now_title.set_text(title)
             if self._now_meta:
                 self._now_meta.set_content(self._now_meta_html(now if isinstance(now, dict) else {}))
         except Exception:
@@ -627,15 +627,19 @@ class ControlUI:
             for i, it in enumerate(items, start=1):
                 if not isinstance(it, dict):
                     continue
-                title = html.escape(str(it.get("title") or "—"))
-                playlist = html.escape(str(it.get("playlist") or "—"))
-                ts = html.escape(str(it.get("ts") or ""))
-                tail = f' <span class="t-dim">[{ts}]</span>' if ts else ""
+                title = str(it.get("title_display") or it.get("title") or "—")
+                playlist = str(it.get("playlist") or "—")
+                ts = str(it.get("ts") or "")
+
+                title_e = html.escape(title)
+                playlist_e = html.escape(playlist)
+                ts_e = html.escape(ts)
+                tail = f' <span class="t-dim">[{ts_e}]</span>' if ts else ""
                 ui.html(
                     f'<div class="az-item"><span class="idx">{i}.</span> '
-                    f'<span class="txt" data-copy="{title}">{title}</span> '
+                    f'<span class="txt" data-copy="{title_e}">{title_e}</span> '
                     f'<span class="t-dim">|</span> '
-                    f'<span class="t-cyan t-bold" data-copy="{playlist}">{playlist}</span>'
+                    f'<span class="t-cyan t-bold" data-copy="{playlist_e}">{playlist_e}</span>'
                     f'{tail}'
                     f'</div>'
                 )

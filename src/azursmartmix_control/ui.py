@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import html
 import re
@@ -330,18 +330,14 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 
 /* ------------------------------------------------------------
-   MULTI-COLUMN LAYOUT FOR COMPOSE ENV TABLE (centered, equal width)
+   MULTI-COLUMN LAYOUT FOR COMPOSE ENV TABLE (NOW 2 COLUMNS)
    ------------------------------------------------------------ */
 .az-env-grid{
   display: grid;
-  grid-template-columns: repeat(3, minmax(420px, 1fr));
+  grid-template-columns: repeat(2, minmax(420px, 1fr));
   gap: 12px;
-  justify-content: center;   /* centers the whole grid */
+  justify-content: center;
   align-items: start;
-}
-
-@media (max-width: 1550px){
-  .az-env-grid{ grid-template-columns: repeat(2, minmax(420px, 1fr)); }
 }
 @media (max-width: 1050px){
   .az-env-grid{ grid-template-columns: 1fr; }
@@ -353,6 +349,94 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-inp input{
   color: rgba(255,255,255,.92) !important;
   font-family: var(--az-mono) !important;
+}
+
+/* ------------------------------------------------------------
+   SETTINGS UI (2 columns of categories)
+   ------------------------------------------------------------ */
+.az-settings-toolbar{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items:center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.az-settings-tools-left{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items:center;
+}
+
+.az-settings-tools-right{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items:center;
+}
+
+.az-settings-grid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 1200px){
+  .az-settings-grid{ grid-template-columns: 1fr; }
+}
+
+.set-box{
+  border: 1px solid var(--az-border);
+  border-radius: 12px;
+  background: rgba(0,0,0,.10);
+  overflow: hidden;
+}
+.set-box-h{
+  padding: 10px 12px;
+  font-weight: 950;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.set-box-h .meta{
+  font-family: var(--az-mono);
+  font-size: 11px;
+  opacity:.75;
+}
+.set-box-b{
+  padding: 6px 10px;
+}
+
+.set-row{
+  display:grid;
+  grid-template-columns: 270px 1fr;
+  gap: 10px;
+  padding: 8px 8px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  align-items:center;
+}
+.set-row:last-child{ border-bottom:none; }
+
+.set-k{
+  font-family: var(--az-mono);
+  font-size: 12px;
+  color: rgba(255,255,255,.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.set-ctl{
+  justify-self: end;
+}
+.set-inp{
+  width: 100%;
+}
+.set-empty{
+  padding: 10px 8px;
+  opacity:.7;
+  font-size: 12px;
 }
 """
 
@@ -369,6 +453,31 @@ document.addEventListener('click', (ev) => {
 
 
 class ControlUI:
+    # Ordre strict demandé par l’utilisateur
+    SETTINGS_CATEGORIES_ORDER: List[str] = [
+        "SCHED",
+        "PLAYBIN",
+        "BRIDGE",
+        "PREPROCESS",
+        "Preprocess (FFmpeg)",
+        "Preprocess cap cpu",
+        "PREPROCESS_SILENCE",
+        "PREPROCESS_FADE",
+        "PREPROCESS cache",
+        "PREPROCESS_POST",
+        "PREPROCESS_LUFS",
+        "PREPROCESS_HPF",
+        "PREPROCESS_COMP",
+        "PREPROCESS_LIMITER",
+        "ICECAST",
+        "Encode",
+        "Log enable",
+        "Other",
+    ]
+
+    _BOOL_TRUE = {"1", "true", "yes", "y", "on", "enabled"}
+    _BOOL_FALSE = {"0", "false", "no", "n", "off", "disabled"}
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_base = settings.api_prefix.rstrip("/")
@@ -410,13 +519,30 @@ class ControlUI:
 
         self._tabs = None
         self._tab_dashboard = "Dashboard"
-        self._tab_compose = "Compose Env"
+        self._tab_settings = "Settings"
 
+        # ---------------- Settings UI state ----------------
+        self._settings_service = "engine"
+        self._settings_service_select = None
+        self._settings_advanced = False
+        self._settings_advanced_switch = None
+        self._settings_search = None
+
+        self._settings_grid_container = None
+        self._settings_env_base: Dict[str, str] = {}
+        self._settings_env_work: Dict[str, str] = {}
+        self._settings_inputs: Dict[str, Any] = {}
+
+        # ---------------- Legacy raw env editor (kept as fallback) ----------------
         self._compose_env_frame = None
         self._compose_env_rows_container = None
         self._compose_env_rows: List[Dict[str, Any]] = []
         self._compose_env_busy = False
         self._compose_env_format = "dict"
+        self._compose_env_target_service = "engine"
+        self._compose_env_title_label = None
+
+    # -------------------- Small helpers --------------------
 
     def _stream_public_url(self) -> str:
         public = getattr(self.settings, "icecast_public_url", "") or ""
@@ -436,6 +562,101 @@ class ControlUI:
         if ":" in s:
             return s.rsplit(":", 1)[1].strip() or "latest"
         return "latest"
+
+    def _parse_bool_like(self, v: Any) -> Optional[bool]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        if s in self._BOOL_TRUE:
+            return True
+        if s in self._BOOL_FALSE:
+            return False
+        return None
+
+    def _is_bool_like(self, v: Any) -> bool:
+        return self._parse_bool_like(v) is not None
+
+    def _norm_bool_str(self, b: bool) -> str:
+        return "true" if bool(b) else "false"
+
+    def _is_number_like(self, v: Any) -> bool:
+        if v is None:
+            return False
+        s = str(v).strip()
+        if not s:
+            return False
+        try:
+            float(s)
+            return True
+        except Exception:
+            return False
+
+    def _settings_service_label(self, service: str) -> str:
+        if service == "scheduler":
+            name = getattr(self.settings, "compose_service_scheduler", "") or getattr(self.settings, "compose_service_sched", "") or "scheduler"
+            return f"scheduler ({name})"
+        name = getattr(self.settings, "compose_service_engine", "") or "engine"
+        return f"engine ({name})"
+
+    def _compose_env_endpoint(self, service: str) -> str:
+        if service == "scheduler":
+            return "/compose/scheduler_env"
+        return "/compose/engine_env"
+
+    def _category_for_key(self, key: str) -> str:
+        k = (key or "").strip().upper()
+        if not k:
+            return "Other"
+
+        # Log enable (priorité si c'est clairement du flag debug/log)
+        if re.search(r"\b(LOG|DEBUG)\b", k) and not (k.startswith("ICECAST_") or k.startswith("SCHED_")):
+            return "Log enable"
+
+        # Top-level prefixes
+        if k.startswith("SCHED_"):
+            return "SCHED"
+        if k.startswith("PLAYBIN_"):
+            return "PLAYBIN"
+        if k.startswith("BRIDGE_"):
+            return "BRIDGE"
+        if k.startswith("ICECAST_"):
+            return "ICECAST"
+
+        # Encode (best-effort heuristics)
+        if k.startswith("ENCODE_") or k.startswith("AUDIO_ENCODE_") or k.startswith("OUTPUT_ENCODE_"):
+            return "Encode"
+
+        # PREPROCESS family and subcategories
+        if k.startswith("PREPROCESS_"):
+            if k.startswith("PREPROCESS_FFMPEG"):
+                return "Preprocess (FFmpeg)"
+            if "CPU" in k or k.startswith("PREPROCESS_CPU") or "CPULIMIT" in k or "CPU_LIMIT" in k:
+                return "Preprocess cap cpu"
+            if k.startswith("PREPROCESS_SILENCE"):
+                return "PREPROCESS_SILENCE"
+            if k.startswith("PREPROCESS_FADE"):
+                return "PREPROCESS_FADE"
+            if k.startswith("PREPROCESS_CACHE") or k.startswith("PREPROCESS_TTL") or k.startswith("PREPROCESS_CAP"):
+                return "PREPROCESS cache"
+            if k.startswith("PREPROCESS_POST"):
+                return "PREPROCESS_POST"
+            if k.startswith("PREPROCESS_LUFS"):
+                return "PREPROCESS_LUFS"
+            if k.startswith("PREPROCESS_HPF"):
+                return "PREPROCESS_HPF"
+            if k.startswith("PREPROCESS_COMP"):
+                return "PREPROCESS_COMP"
+            if k.startswith("PREPROCESS_LIMITER"):
+                return "PREPROCESS_LIMITER"
+            return "PREPROCESS"
+
+        # Log enable fallback for SCHED/ICECAST log flags
+        if re.search(r"\b(LOG|DEBUG)\b", k):
+            return "Log enable"
+
+        return "Other"
+
+    # -------------------- Build UI --------------------
 
     def build(self) -> None:
         ui.add_head_html(f"<style>{AZURA_CSS}</style>")
@@ -476,7 +697,7 @@ class ControlUI:
             with ui.element("div").classes("az-tabsbar"):
                 with ui.tabs().classes("w-full") as self._tabs:
                     ui.tab(self._tab_dashboard)
-                    ui.tab(self._tab_compose)
+                    ui.tab(self._tab_settings)
 
             with ui.tab_panels(self._tabs, value=self._tab_dashboard).classes("w-full"):
                 with ui.tab_panel(self._tab_dashboard):
@@ -489,11 +710,11 @@ class ControlUI:
                     with ui.element("div").classes("az-grid").style("margin-top: 16px;"):
                         self._card_logs()
 
-                with ui.tab_panel(self._tab_compose):
-                    self._card_compose_env_editor()
+                with ui.tab_panel(self._tab_settings):
+                    self._card_settings()
 
         ui.timer(0.1, self.refresh_all, once=True)
-        ui.timer(0.2, self.refresh_compose_env_editor, once=True)
+        ui.timer(0.2, self.refresh_settings, once=True)
 
     def _on_tag_change(self, e) -> None:
         try:
@@ -736,30 +957,244 @@ class ControlUI:
                         with ui.element("div").classes("console-frame").style("background: rgba(0,0,0,.55) !important;"):
                             self._log_html_sched = ui.html('<div class="console-content">—</div>')
 
-    # -------------------- Compose env editor tab --------------------
+    # -------------------- Settings tab --------------------
 
-    def _card_compose_env_editor(self) -> None:
-        with ui.element("div").classes("az-card").style("grid-column: 1 / -1;"):
+    def _card_settings(self) -> None:
+        with ui.element("div").classes("az-card").style("grid-column: 1 / -1; min-width: unset;"):
             with ui.element("div").classes("az-card-h"):
-                ui.label("Compose Env Editor")
-                ui.label(f"{self.settings.compose_service_engine} @ {self.settings.azuramix_compose_file}").classes("text-xs").style("opacity:.85;")
+                ui.label("Settings")
+                ui.label("compose env (grouped)").classes("text-xs").style("opacity:.85;")
+
             with ui.element("div").classes("az-card-b"):
-                self._compose_env_frame = ui.element("div").classes("az-editor")
+                # Toolbar
+                with ui.element("div").classes("az-settings-toolbar"):
+                    with ui.element("div").classes("az-settings-tools-left"):
+                        # Service selector (engine/scheduler)
+                        svc_opts: Dict[str, str] = {"engine": "Engine", "scheduler": "Scheduler"}
+                        self._settings_service_select = ui.select(
+                            options=svc_opts,
+                            value=self._settings_service,
+                            label="Service",
+                            on_change=self._on_settings_service_change,
+                        ).props("dense outlined dark").style("min-width: 160px;")
 
-                with self._compose_env_frame:
-                    with ui.element("div").classes("az-editor-h"):
-                        ui.label("Edit environment variables (engine)").style("font-weight: 950;")
-                        with ui.row().classes("items-center gap-2"):
-                            ui.button("Reload", on_click=self.refresh_compose_env_editor).props("outline")
-                            ui.button("Add", on_click=self._compose_env_add_row).props("outline")
-                            ui.button("Save", on_click=self.save_compose_env_editor).props("unelevated color=positive")
+                        self._settings_advanced_switch = ui.switch(
+                            "Advanced",
+                            value=self._settings_advanced,
+                            on_change=self._on_settings_advanced_change,
+                        ).props("dense")
 
-                    ui.label("Changes are written to docker-compose.yml. Restart/Recreate required to apply.").style(
+                        self._settings_search = ui.input(
+                            placeholder="Filter (key)…",
+                            on_change=lambda e: self._render_settings_grid(),
+                        ).classes("az-inp").props("dense outlined dark").style("min-width: 260px;")
+
+                    with ui.element("div").classes("az-settings-tools-right"):
+                        ui.button("Reload", on_click=self.refresh_settings).props("outline")
+                        ui.button("Save", on_click=self.save_settings).props("unelevated color=positive")
+
+                ui.label(
+                    "Mode normal: uniquement les booléens (switch). Mode advanced: tout, séparé par catégorie. Save écrit dans docker-compose.yml (restart/recreate requis)."
+                ).style("font-size: 12px; opacity:.75; margin-bottom: 10px;")
+
+                self._settings_grid_container = ui.element("div").classes("az-settings-grid")
+
+                # Legacy raw editor kept in Advanced only (safety net)
+                with ui.expansion("Raw env editor (advanced / fallback)", icon="tune").classes("mt-3"):
+                    ui.label("Éditeur brut key/value (fallback). À utiliser quand un paramètre ne remonte pas bien dans la vue catégorisée.").style(
                         "font-size: 12px; opacity:.75; margin-bottom: 10px;"
                     )
+                    self._build_raw_env_editor()
 
-                    # IMPORTANT: this container is now a grid (3 cols -> 2 cols -> 1 col)
-                    self._compose_env_rows_container = ui.element("div").classes("az-env-grid")
+    def _on_settings_service_change(self, e) -> None:
+        try:
+            self._settings_service = str(e.value).strip() or "engine"
+        except Exception:
+            self._settings_service = "engine"
+        # reset search to avoid confusion across services
+        if self._settings_search:
+            self._settings_search.set_value("")
+        ui.timer(0.01, self.refresh_settings, once=True)
+
+    def _on_settings_advanced_change(self, e) -> None:
+        try:
+            self._settings_advanced = bool(e.value)
+        except Exception:
+            self._settings_advanced = False
+        self._render_settings_grid()
+
+    def _render_settings_grid(self) -> None:
+        if not self._settings_grid_container:
+            return
+
+        self._settings_grid_container.clear()
+        self._settings_inputs = {}
+
+        q = ""
+        if self._settings_search:
+            q = str(self._settings_search.value or "").strip().lower()
+
+        advanced = bool(self._settings_advanced)
+        env = self._settings_env_work or {}
+
+        # bucketize keys
+        buckets: Dict[str, List[str]] = {c: [] for c in self.SETTINGS_CATEGORIES_ORDER}
+        for k in sorted(env.keys()):
+            cat = self._category_for_key(k)
+            if cat not in buckets:
+                buckets["Other"].append(k)
+            else:
+                buckets[cat].append(k)
+
+        with self._settings_grid_container:
+            for cat in self.SETTINGS_CATEGORIES_ORDER:
+                keys = list(buckets.get(cat, []))
+
+                # filter by search
+                if q:
+                    keys = [k for k in keys if q in k.lower()]
+
+                # normal mode: bool only
+                if not advanced:
+                    keys = [k for k in keys if self._is_bool_like(env.get(k))]
+
+                # en mode normal, on skip les catégories vides pour réduire le bruit
+                if not advanced and not keys:
+                    continue
+
+                with ui.element("div").classes("set-box"):
+                    with ui.element("div").classes("set-box-h"):
+                        ui.label(cat)
+                        ui.label(f"{len(keys)} vars").classes("meta")
+
+                    with ui.element("div").classes("set-box-b"):
+                        if not keys:
+                            ui.html('<div class="set-empty">—</div>')
+                            continue
+
+                        # bool first in advanced for readability
+                        if advanced:
+                            keys.sort(key=lambda kk: (0 if self._is_bool_like(env.get(kk)) else 1, kk))
+
+                        for key in keys:
+                            val = env.get(key, "")
+                            self._render_setting_row(key, val, advanced=advanced)
+
+    def _render_setting_row(self, key: str, val: str, advanced: bool) -> None:
+        # All updates go into _settings_env_work to survive re-render
+        def set_work(v: Any) -> None:
+            self._settings_env_work[str(key)] = "" if v is None else str(v)
+
+        with ui.element("div").classes("set-row"):
+            k_e = html.escape(str(key))
+            ui.html(f'<div class="set-k" data-copy="{k_e}" title="{k_e}">{k_e}</div>')
+
+            b = self._parse_bool_like(val)
+            if b is not None:
+                sw = ui.switch(value=bool(b), on_change=lambda e: set_work(self._norm_bool_str(bool(e.value)))).props("dense").classes("set-ctl")
+                self._settings_inputs[key] = sw
+                return
+
+            # Normal mode doesn't render non-bool rows at all (filtered earlier)
+            if not advanced:
+                ui.html('<div class="set-empty">—</div>')
+                return
+
+            # Advanced: text/number input
+            inp = ui.input(
+                value=str(val),
+                placeholder="value",
+                on_change=lambda e: set_work(e.value),
+            ).classes("az-inp set-inp").props("dense outlined dark")
+            if self._is_number_like(val):
+                inp.props("type=number")
+            self._settings_inputs[key] = inp
+
+    async def refresh_settings(self) -> None:
+        # Load env from selected service endpoint
+        svc = self._settings_service or "engine"
+        path = self._compose_env_endpoint(svc)
+
+        try:
+            data = await self._get_json(path)
+            env = data.get("environment") if isinstance(data, dict) else None
+            if not isinstance(env, dict):
+                env = {}
+
+            clean: Dict[str, str] = {}
+            for k, v in env.items():
+                if k is None:
+                    continue
+                kk = str(k).strip()
+                if not kk:
+                    continue
+                clean[kk] = "" if v is None else str(v)
+
+            self._settings_env_base = dict(clean)
+            # only refresh work env if it's empty or if service changed effectively
+            self._settings_env_work = dict(clean)
+
+            # sync raw editor target
+            self._compose_env_target_service = svc
+            if self._compose_env_title_label:
+                self._compose_env_title_label.set_text(f"Edit environment variables ({self._settings_service_label(svc)})")
+
+            self._render_settings_grid()
+            await self.refresh_compose_env_editor()  # keep raw editor consistent if opened
+        except Exception as e:
+            self._settings_env_base = {}
+            self._settings_env_work = {"error": str(e)}
+            self._render_settings_grid()
+
+    async def save_settings(self) -> None:
+        if self._compose_env_busy:
+            ui.notify("Save busy", type="warning")
+            return
+
+        svc = self._settings_service or "engine"
+        path = self._compose_env_endpoint(svc)
+
+        self._compose_env_busy = True
+        try:
+            # Serialize full map (work env already includes untouched keys)
+            out: Dict[str, str] = {}
+            for k, v in (self._settings_env_work or {}).items():
+                kk = str(k).strip()
+                if not kk:
+                    continue
+                out[kk] = "" if v is None else str(v)
+
+            payload = {"environment": out, "env_format_prefer": self._compose_env_format}
+            r = await self._post_json(path, payload)
+
+            if r.get("ok"):
+                self._set_restart_needed(True)
+                ui.notify("Saved. Restart/Recreate required.", type="warning")
+                await self.refresh_settings()
+                await self.refresh_engine_env()
+            else:
+                ui.notify("Save failed", type="negative")
+        except Exception as e:
+            ui.notify(f"Save error: {e}", type="negative")
+        finally:
+            self._compose_env_busy = False
+
+    # -------------------- Legacy raw env editor (fallback) --------------------
+
+    def _build_raw_env_editor(self) -> None:
+        with ui.element("div").classes("az-editor"):
+            with ui.element("div").classes("az-editor-h"):
+                self._compose_env_title_label = ui.label(f"Edit environment variables ({self._settings_service_label(self._compose_env_target_service)})").style("font-weight: 950;")
+                with ui.row().classes("items-center gap-2"):
+                    ui.button("Reload", on_click=self.refresh_compose_env_editor).props("outline")
+                    ui.button("Add", on_click=self._compose_env_add_row).props("outline")
+                    ui.button("Save", on_click=self.save_compose_env_editor).props("unelevated color=positive")
+
+            ui.label("Édition brute: attention aux typos. Conserve les clés non affichées et écrit dans docker-compose.yml.").style(
+                "font-size: 12px; opacity:.75; margin-bottom: 10px;"
+            )
+
+            self._compose_env_rows_container = ui.element("div").classes("az-env-grid")
 
     def _compose_env_add_row(self) -> None:
         self._compose_env_rows.append({"k": "", "v": "", "k_in": None, "v_in": None, "rm_btn": None})
@@ -778,7 +1213,6 @@ class ControlUI:
             for idx, row in enumerate(self._compose_env_rows):
                 with ui.element("div").classes("az-editor-row"):
                     with ui.element("div").classes("az-editor-grid"):
-                        # Force Quasar dark inputs + ensure readability
                         k_in = ui.input(value=str(row.get("k", "")), placeholder="KEY").classes("az-inp").props("dense outlined dark")
                         v_in = ui.input(value=str(row.get("v", "")), placeholder="VALUE").classes("az-inp").props("dense outlined dark")
 
@@ -798,9 +1232,13 @@ class ControlUI:
     async def refresh_compose_env_editor(self) -> None:
         if self._compose_env_busy:
             return
+        if not self._compose_env_rows_container:
+            return
+
         self._compose_env_busy = True
         try:
-            data = await self._get_json("/compose/engine_env")
+            path = self._compose_env_endpoint(self._compose_env_target_service)
+            data = await self._get_json(path)
             env = data.get("environment") if isinstance(data, dict) else None
             if not isinstance(env, dict):
                 env = {}
@@ -818,6 +1256,10 @@ class ControlUI:
         if self._compose_env_busy:
             ui.notify("Compose editor busy", type="warning")
             return
+        if not self._compose_env_rows_container:
+            ui.notify("Raw editor not initialized", type="warning")
+            return
+
         self._compose_env_busy = True
         try:
             env_out: Dict[str, str] = {}
@@ -838,11 +1280,13 @@ class ControlUI:
                 env_out[k] = v
 
             payload = {"environment": env_out, "env_format_prefer": self._compose_env_format}
-            r = await self._post_json("/compose/engine_env", payload)
+            path = self._compose_env_endpoint(self._compose_env_target_service)
+            r = await self._post_json(path, payload)
 
             if r.get("ok"):
                 self._set_restart_needed(True)
                 ui.notify("Saved. Restart required.", type="warning")
+                await self.refresh_settings()
                 await self.refresh_engine_env()
             else:
                 ui.notify("Save failed", type="negative")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple, Optional
-
+from typing import Any, Dict, List, Tuple, Optional, Callable
 import html
 import re
 import urllib.parse
@@ -214,9 +213,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .env-row:hover{ background: rgba(255,255,255,.05); }
 
-.rt-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px){ .rt-grid{ grid-template-columns: 1fr; } }
-
 .console-frame{
   height: 420px;
   overflow: auto;
@@ -412,9 +408,10 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   padding: 6px 10px;
 }
 
+/* ✅ +90% on the KEY column (from 270px -> 520px) */
 .set-row{
   display:grid;
-  grid-template-columns: 270px 1fr;
+  grid-template-columns: 520px 1fr;
   gap: 10px;
   padding: 8px 8px;
   border-bottom: 1px solid rgba(255,255,255,.06);
@@ -422,14 +419,31 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .set-row:last-child{ border-bottom:none; }
 
+.set-left{
+  display:flex;
+  flex-direction:column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .set-k{
   font-family: var(--az-mono);
   font-size: 12px;
-  color: rgba(255,255,255,.82);
+  color: rgba(255,255,255,.92);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.set-desc{
+  font-size: 11px;
+  color: var(--az-muted);
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+  opacity: .92;
+}
+
 .set-ctl{
   justify-self: end;
 }
@@ -456,7 +470,6 @@ document.addEventListener('click', (ev) => {
 
 
 class ControlUI:
-    # Ordre strict demandé par l’utilisateur
     SETTINGS_CATEGORIES_ORDER: List[str] = [
         "SCHED",
         "PLAYBIN",
@@ -483,7 +496,7 @@ class ControlUI:
     _BOOL_FALSE_WORD = {"false", "no", "n", "off", "disabled"}
     _BOOL_NUM = {"0", "1"}
 
-    # Heuristique: n'accepter 0/1 comme bool QUE si la clé ressemble à un flag
+    # 0/1 accepted only if key looks like a flag
     _BOOL_KEY_SUFFIXES = (
         "_ENABLE",
         "_ENABLED",
@@ -506,7 +519,6 @@ class ControlUI:
         "_LOOP",
         "_LOOP_ONCE",
     )
-
     _BOOL_KEY_CONTAINS = (
         "_ENABLE_",
         "_ENABLED_",
@@ -559,7 +571,7 @@ class ControlUI:
         self._tab_dashboard = "Dashboard"
         self._tab_settings = "Settings"
 
-        # ---------------- Settings UI state ----------------
+        # Settings UI state
         self._settings_service = "engine"
         self._settings_service_select = None
         self._settings_advanced = False
@@ -571,14 +583,122 @@ class ControlUI:
         self._settings_env_work: Dict[str, str] = {}
         self._settings_inputs: Dict[str, Any] = {}
 
-        # ---------------- Legacy raw env editor (kept as fallback) ----------------
-        self._compose_env_frame = None
+        # Raw editor fallback
         self._compose_env_rows_container = None
         self._compose_env_rows: List[Dict[str, Any]] = []
         self._compose_env_busy = False
         self._compose_env_format = "dict"
         self._compose_env_target_service = "engine"
         self._compose_env_title_label = None
+
+        # Description rules (project-aware)
+        self._desc_rules: List[Tuple[re.Pattern, Callable[[re.Match], str]]] = self._build_desc_rules()
+
+    # -------------------- Descriptions (project-aware) --------------------
+
+    def _build_desc_rules(self) -> List[Tuple[re.Pattern, Callable[[re.Match], str]]]:
+        """Rules are ordered: first match wins."""
+        def fixed(s: str) -> Callable[[re.Match], str]:
+            return lambda _m: s
+
+        rules: List[Tuple[re.Pattern, Callable[[re.Match], str]]] = [
+            # Scheduler
+            (re.compile(r"^TZ$", re.I), fixed("Timezone runtime (ex: Europe/Paris).")),
+            (re.compile(r"^SCHED_MODE$", re.I), fixed("Mode du scheduler (ex: azuracast_schedule).")),
+            (re.compile(r"^SCHED_AZURACAST_REFRESH_S$", re.I), fixed("Intervalle de refresh AzuraCast (secondes).")),
+            (re.compile(r"^SCHED_ACCESS_LOG$", re.I), fixed("Active les logs d’accès Uvicorn côté scheduler.")),
+            (re.compile(r"^SCHED_(LOOKAHEAD|LOOKAHEAD_D|LOOKAHEAD_DAYS)$", re.I), fixed("Fenêtre de lookahead planning (jours).")),
+            # Playbin
+            (re.compile(r"^PLAYBIN_SINGLE_SEGMENT$", re.I), fixed("Mitigation micro-slips: force un seul segment Gst (timestamp continuity).")),
+            (re.compile(r"^PLAYBIN_.*BUFFER.*$", re.I), fixed("Paramètre de buffering playbin/queue (latence/robustesse).")),
+            # Bridge
+            (re.compile(r"^BRIDGE_.*PACK.*MERGE.*$", re.I), fixed("Bridge pack: fusion offline fin(A)+début(B) pour transition sans drop.")),
+            (re.compile(r"^BRIDGE_.*EDGE.*(MS)?$", re.I), fixed("Durée du micro-fade appliqué au pack de transition (ms).")),
+            # Preprocess - global
+            (re.compile(r"^PREPROCESS_ENABLE$", re.I), fixed("Active le pipeline de prétraitement (FFmpeg) avant lecture playbin.")),
+            (re.compile(r"^PREPROCESS_AHEAD$", re.I), fixed("Lookahead preprocess (secondes): prépare le prochain média en avance.")),
+            (re.compile(r"^PREPROCESS_WORKERS$", re.I), fixed("Nombre de workers FFmpeg en parallèle (charge CPU vs latence).")),
+            (re.compile(r"^PREPROCESS_FMT$", re.I), fixed("Format intermédiaire (ex: wav) pour stabiliser timestamps/concat.")),
+            (re.compile(r"^PREPROCESS_MAX_S$", re.I), fixed("Durée max traitée par média (secondes) — sécurité CPU.")),
+            (re.compile(r"^PREPROCESS_ENFORCE_SAFE$", re.I), fixed("Force l’usage des sorties 'safe' (trim/shape OK) sinon fallback (blank).")),
+            (re.compile(r"^PREPROCESS_WAIT_S$", re.I), fixed("Délai max pour obtenir une sortie safe (secondes) avant fallback.")),
+            # Preprocess - ffmpeg shaping
+            (re.compile(r"^PREPROCESS_FFMPEG_.*CPU.*PCT$", re.I), fixed("Cap CPU FFmpeg (en %), pour éviter de saturer la machine.")),
+            (re.compile(r"^PREPROCESS_FFMPEG_THREADS$", re.I), fixed("Threads FFmpeg (par worker).")),
+            (re.compile(r"^PREPROCESS_FFMPEG_NICE$", re.I), fixed("Nice FFmpeg (priorité CPU) — plus élevé = moins prioritaire.")),
+            (re.compile(r"^PREPROCESS_FFMPEG_IONICE.*$", re.I), fixed("IOnice FFmpeg (priorité disque) — utile sur host chargé.")),
+            # Preprocess - silence
+            (re.compile(r"^PREPROCESS_SILENCE_.*$", re.I), fixed("Détection/suppression de silence (intro/outro) avant shaping.")),
+            # Preprocess - fade
+            (re.compile(r"^PREPROCESS_FADE_.*$", re.I), fixed("Fades appliqués en preprocess (fade-in/out, edge-fade).")),
+            # Preprocess - cache
+            (re.compile(r"^PREPROCESS_CACHE.*$", re.I), fixed("Cache preprocess (réutilisation sorties FFmpeg).")),
+            (re.compile(r"^PREPROCESS_TTL_H$", re.I), fixed("TTL du cache (heures).")),
+            (re.compile(r"^PREPROCESS_CAP(_MB)?$", re.I), fixed("Capacité max cache (MB) avant éviction.")),
+            # Post
+            (re.compile(r"^PREPROCESS_POST.*$", re.I), fixed("Post-processing après trim (ex: limiter, fades, etc.).")),
+            # LUFS
+            (re.compile(r"^PREPROCESS_LUFS_.*$", re.I), fixed("Gestion loudness: target LUFS/true-peak (gain statique / ebur128).")),
+            # HPF
+            (re.compile(r"^PREPROCESS_HPF_.*$", re.I), fixed("Filtre passe-haut (rumble control) avant compression/limiter.")),
+            # COMP
+            (re.compile(r"^PREPROCESS_COMP_.*$", re.I), fixed("Compression dynamique (niveau/attaque/release/ratio).")),
+            # LIMITER
+            (re.compile(r"^PREPROCESS_LIMITER_.*$", re.I), fixed("Limiteur (protection clipping/true-peak).")),
+            # Icecast
+            (re.compile(r"^ICECAST_HOST$", re.I), fixed("Hôte Icecast cible.")),
+            (re.compile(r"^ICECAST_PORT$", re.I), fixed("Port Icecast cible.")),
+            (re.compile(r"^ICECAST_MOUNT$", re.I), fixed("Mountpoint Icecast (ex: /gst-test.mp3).")),
+            (re.compile(r"^ICECAST_USER$", re.I), fixed("Utilisateur Icecast (source user).")),
+            (re.compile(r"^ICECAST_PASS$", re.I), fixed("Mot de passe Icecast (source password).")),
+            (re.compile(r"^ICECAST_PUBLIC_URL$", re.I), fixed("URL publique du stream (pour le player HTML5 et liens).")),
+            # Encode
+            (re.compile(r"^(ENCODE|AUDIO_ENCODE|OUTPUT_ENCODE)_.*$", re.I), fixed("Paramètres d’encodage sortie (codec/bitrate/format).")),
+            # Logs
+            (re.compile(r"^(LOG|DEBUG)_.*$", re.I), fixed("Contrôle verbosité / flags de debug.")),
+        ]
+        return rules
+
+    def _describe_key(self, key: str, val: Any) -> str:
+        """Returns a short, human-friendly description for a setting."""
+        k = (key or "").strip()
+        if not k:
+            return "Variable d’environnement (non nommée)."
+
+        for pat, fn in self._desc_rules:
+            m = pat.match(k)
+            if m:
+                return fn(m)
+
+        # Generic unit heuristics (safe fallback)
+        u = k.upper()
+        if u.endswith("_S"):
+            return "Durée (secondes)."
+        if u.endswith("_MS"):
+            return "Durée (millisecondes)."
+        if u.endswith("_H"):
+            return "Durée (heures)."
+        if u.endswith("_HZ"):
+            return "Fréquence (Hz)."
+        if u.endswith("_DB"):
+            return "Niveau (dB)."
+        if u.endswith("_PCT") or u.endswith("_PERCENT"):
+            return "Pourcentage (%)."
+        if u.endswith("_MB") or u.endswith("_GB"):
+            return "Taille / capacité (MB/GB)."
+        if "URL" in u:
+            return "URL (endpoint / ressource)."
+        if "HOST" in u:
+            return "Nom d’hôte / DNS."
+        if "PORT" in u:
+            return "Port réseau."
+        if "PATH" in u or "DIR" in u:
+            return "Chemin filesystem (dans le conteneur)."
+        if "THREAD" in u:
+            return "Concurrence / threads (impact CPU)."
+
+        # Last resort
+        return "Paramètre runtime (pass-through) — non documenté dans l’UI."
 
     # -------------------- Small helpers --------------------
 
@@ -607,27 +727,18 @@ class ControlUI:
         u = str(key).strip().upper()
         if not u:
             return False
-
         if u.endswith(self._BOOL_KEY_SUFFIXES):
             return True
         for frag in self._BOOL_KEY_CONTAINS:
             if frag in u:
                 return True
-
-        # quelques exceptions utiles (et safe)
         if u in {"LS_CHECK", "SCHED_ACCESS_LOG", "SCHED_ACCESSLOG"}:
             return True
-
-        # LOG_ prefix => flag
         if u.startswith("LOG_"):
             return True
-
         return False
 
     def _parse_bool_like_key(self, key: str, v: Any) -> Optional[bool]:
-        """Retourne True/False si (key,v) est vraiment un bool.
-        Règle: on accepte 0/1 uniquement si key ressemble à un flag.
-        """
         if v is None:
             return None
         s = str(v).strip().lower()
@@ -635,17 +746,16 @@ class ControlUI:
             return True
         if s in self._BOOL_FALSE_WORD:
             return False
-
         if s in self._BOOL_NUM:
-            return True if (s == "1" and self._key_is_bool_flag(key)) else (False if (s == "0" and self._key_is_bool_flag(key)) else None)
-
+            if self._key_is_bool_flag(key):
+                return True if s == "1" else False
+            return None
         return None
 
     def _is_bool_like_key(self, key: str, v: Any) -> bool:
         return self._parse_bool_like_key(key, v) is not None
 
     def _format_bool_like(self, template_val: Any, b: bool) -> str:
-        """Préserve le format d'origine: 1/0, on/off, yes/no, enabled/disabled, true/false."""
         t = "" if template_val is None else str(template_val).strip().lower()
         if t in {"0", "1"}:
             return "1" if b else "0"
@@ -769,21 +879,20 @@ class ControlUI:
         with ui.element("div").classes("az-wrap"):
             with ui.element("div").classes("az-tabsbar"):
                 with ui.tabs().classes("w-full") as self._tabs:
-                    ui.tab(self._tab_dashboard)
-                    ui.tab(self._tab_settings)
+                    ui.tab("Dashboard")
+                    ui.tab("Settings")
 
-            with ui.tab_panels(self._tabs, value=self._tab_dashboard).classes("w-full"):
-                with ui.tab_panel(self._tab_dashboard):
+            with ui.tab_panels(self._tabs, value="Dashboard").classes("w-full"):
+                with ui.tab_panel("Dashboard"):
                     with ui.element("div").classes("az-grid"):
                         self._card_runtime()
                         self._card_env()
                         self._card_now()
                         self._card_upcoming()
-
                     with ui.element("div").classes("az-grid").style("margin-top: 16px;"):
                         self._card_logs()
 
-                with ui.tab_panel(self._tab_settings):
+                with ui.tab_panel("Settings"):
                     self._card_settings()
 
         ui.timer(0.1, self.refresh_all, once=True)
@@ -821,7 +930,6 @@ class ControlUI:
                 with ui.element("div").classes("az-card-b"):
                     ui.label(f"cwd: {self.settings.azuramix_dir}").style("font-family: var(--az-mono); font-size: 12px; opacity:.85;")
                     ui.label(f"compose: {self.settings.azuramix_compose_file}").style("font-family: var(--az-mono); font-size: 12px; opacity:.65; margin-top: 2px;")
-
                     ui.separator().style("opacity:.25; margin: 10px 0;")
                     with ui.element("div").classes("console-frame").style("height: 520px;"):
                         self._ops_html = ui.html('<div class="console-content">—</div>')
@@ -909,7 +1017,7 @@ class ControlUI:
             qs = "?tag=" + urllib.parse.quote(tag, safe="")
         await self._run_op(f"Update (down + rm image:{tag or 'default'})", "/ops/compose/update" + qs, clears_restart_hint=True)
 
-    # -------------------- Cards (Dashboard) --------------------
+    # -------------------- Dashboard cards --------------------
 
     def _card_runtime(self) -> None:
         with ui.element("div").classes("az-card"):
@@ -1057,7 +1165,7 @@ class ControlUI:
 
                         self._settings_search = ui.input(
                             placeholder="Filter (key)…",
-                            on_change=lambda e: self._render_settings_grid(),
+                            on_change=lambda _e: self._render_settings_grid(),
                         ).classes("az-inp").props("dense outlined dark").style("min-width: 260px;")
 
                     with ui.element("div").classes("az-settings-tools-right"):
@@ -1148,10 +1256,17 @@ class ControlUI:
         def set_work(v: Any) -> None:
             self._settings_env_work[str(key)] = "" if v is None else str(v)
 
-        with ui.element("div").classes("set-row"):
-            k_e = html.escape(str(key))
-            ui.html(f'<div class="set-k" data-copy="{k_e}" title="{k_e}">{k_e}</div>')
+        desc = self._describe_key(key, val)
+        k_e = html.escape(str(key))
+        d_e = html.escape(str(desc))
 
+        with ui.element("div").classes("set-row"):
+            # LEFT (key + description)
+            with ui.element("div").classes("set-left"):
+                ui.html(f'<div class="set-k" data-copy="{k_e}" title="{k_e}">{k_e}</div>')
+                ui.html(f'<div class="set-desc">{d_e}</div>')
+
+            # RIGHT (control)
             b = self._parse_bool_like_key(key, val)
             if b is not None:
                 sw = ui.switch(
@@ -1177,7 +1292,6 @@ class ControlUI:
     async def refresh_settings(self) -> None:
         svc = self._settings_service or "engine"
         path = self._compose_env_endpoint(svc)
-
         try:
             data = await self._get_json(path)
             env = data.get("environment") if isinstance(data, dict) else None
@@ -1239,7 +1353,7 @@ class ControlUI:
         finally:
             self._compose_env_busy = False
 
-    # -------------------- Legacy raw env editor (fallback) --------------------
+    # -------------------- Raw env editor (fallback) --------------------
 
     def _build_raw_env_editor(self) -> None:
         with ui.element("div").classes("az-editor"):
@@ -1374,42 +1488,6 @@ class ControlUI:
             r.raise_for_status()
             return r.text
 
-    _re_level = re.compile(r"\b(INFO|WARN|WARNING|ERROR|CRITICAL|DEBUG)\b")
-    _re_engine_tag = re.compile(r"\bazurmixd\.engine\b")
-    _re_sched_tag = re.compile(r"\bazurmixd\.scheduler\b")
-    _re_preprocess = re.compile(r"\bpreprocess:\b")
-    _re_bridge = re.compile(r"\bbridgeplan:\b")
-    _re_aft = re.compile(r"\bAFT#\d+\b")
-    _re_icecast = re.compile(r"\b(Icecast|ICECAST|/status-json\.xsl|mount|listeners?)\b", re.IGNORECASE)
-    _re_uri = re.compile(r"\b(file:///[^ ]+)\b")
-    _re_stream_start = re.compile(r"\bBUS\s+STREAM_START\b", re.IGNORECASE)
-
-    def _highlight_logs_html(self, text: str) -> str:
-        esc = html.escape(text)
-
-        def repl_level(m: re.Match) -> str:
-            lvl = m.group(1)
-            cls = "t-info"
-            if lvl in ("WARN", "WARNING"):
-                cls = "t-warn"
-            elif lvl in ("ERROR", "CRITICAL"):
-                cls = "t-err"
-            elif lvl == "DEBUG":
-                cls = "t-dim"
-            return f'<span class="{cls} t-bold">{lvl}</span>'
-
-        esc = self._re_level.sub(repl_level, esc)
-        esc = self._re_engine_tag.sub(r'<span class="t-cyan t-bold">azurmixd.engine</span>', esc)
-        esc = self._re_sched_tag.sub(r'<span class="t-cyan t-bold">azurmixd.scheduler</span>', esc)
-        esc = self._re_preprocess.sub(r'<span class="t-vio t-bold">preprocess:</span>', esc)
-        esc = self._re_bridge.sub(r'<span class="t-vio">bridgeplan:</span>', esc)
-        esc = self._re_aft.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
-        esc = self._re_icecast.sub(lambda m: f'<span class="t-cyan">{m.group(0)}</span>', esc)
-        esc = self._re_stream_start.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
-        esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
-
-        return f'<div class="console-content">{esc}</div>'
-
     # -------------------- Refresh flows --------------------
 
     async def refresh_all(self) -> None:
@@ -1536,10 +1614,11 @@ class ControlUI:
                 )
 
     async def refresh_logs(self) -> None:
+        # logs endpoints exist in your stack; keep it minimal here
         try:
             eng = await self._get_text("/logs?service=engine&tail=200")
             if self._log_html_engine:
-                self._log_html_engine.set_content(self._highlight_logs_html(eng))
+                self._log_html_engine.set_content(f'<div class="console-content">{html.escape(eng)}</div>')
         except Exception:
             if self._log_html_engine:
                 self._log_html_engine.set_content('<div class="console-content">—</div>')
@@ -1547,7 +1626,7 @@ class ControlUI:
         try:
             sch = await self._get_text("/logs?service=scheduler&tail=200")
             if self._log_html_sched:
-                self._log_html_sched.set_content(self._highlight_logs_html(sch))
+                self._log_html_sched.set_content(f'<div class="console-content">{html.escape(sch)}</div>')
         except Exception:
             if self._log_html_sched:
                 self._log_html_sched.set_content('<div class="console-content">—</div>')

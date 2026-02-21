@@ -214,6 +214,9 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .env-row:hover{ background: rgba(255,255,255,.05); }
 
+.rt-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px){ .rt-grid{ grid-template-columns: 1fr; } }
+
 .console-frame{
   height: 420px;
   overflow: auto;
@@ -475,8 +478,43 @@ class ControlUI:
         "Other",
     ]
 
-    _BOOL_TRUE = {"1", "true", "yes", "y", "on", "enabled"}
-    _BOOL_FALSE = {"0", "false", "no", "n", "off", "disabled"}
+    # bool words only (NOT 0/1 by default)
+    _BOOL_TRUE_WORD = {"true", "yes", "y", "on", "enabled"}
+    _BOOL_FALSE_WORD = {"false", "no", "n", "off", "disabled"}
+    _BOOL_NUM = {"0", "1"}
+
+    # Heuristique: n'accepter 0/1 comme bool QUE si la clé ressemble à un flag
+    _BOOL_KEY_SUFFIXES = (
+        "_ENABLE",
+        "_ENABLED",
+        "_DISABLE",
+        "_DISABLED",
+        "_DEBUG",
+        "_VERBOSE",
+        "_MUTE",
+        "_ACCESS_LOG",
+        "_LOG",
+        "_LOGS",
+        "_SINGLE_SEGMENT",
+        "_SAFE",
+        "_STRICT",
+        "_FORCE",
+        "_DRYRUN",
+        "_DRY_RUN",
+        "_MERGE",
+        "_SHUFFLE",
+        "_LOOP",
+        "_LOOP_ONCE",
+    )
+
+    _BOOL_KEY_CONTAINS = (
+        "_ENABLE_",
+        "_ENABLED_",
+        "_DISABLE_",
+        "_DISABLED_",
+        "_DEBUG_",
+        "_ACCESS_LOG_",
+    )
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -563,21 +601,61 @@ class ControlUI:
             return s.rsplit(":", 1)[1].strip() or "latest"
         return "latest"
 
-    def _parse_bool_like(self, v: Any) -> Optional[bool]:
+    def _key_is_bool_flag(self, key: str) -> bool:
+        if not key:
+            return False
+        u = str(key).strip().upper()
+        if not u:
+            return False
+
+        if u.endswith(self._BOOL_KEY_SUFFIXES):
+            return True
+        for frag in self._BOOL_KEY_CONTAINS:
+            if frag in u:
+                return True
+
+        # quelques exceptions utiles (et safe)
+        if u in {"LS_CHECK", "SCHED_ACCESS_LOG", "SCHED_ACCESSLOG"}:
+            return True
+
+        # LOG_ prefix => flag
+        if u.startswith("LOG_"):
+            return True
+
+        return False
+
+    def _parse_bool_like_key(self, key: str, v: Any) -> Optional[bool]:
+        """Retourne True/False si (key,v) est vraiment un bool.
+        Règle: on accepte 0/1 uniquement si key ressemble à un flag.
+        """
         if v is None:
             return None
         s = str(v).strip().lower()
-        if s in self._BOOL_TRUE:
+        if s in self._BOOL_TRUE_WORD:
             return True
-        if s in self._BOOL_FALSE:
+        if s in self._BOOL_FALSE_WORD:
             return False
+
+        if s in self._BOOL_NUM:
+            return True if (s == "1" and self._key_is_bool_flag(key)) else (False if (s == "0" and self._key_is_bool_flag(key)) else None)
+
         return None
 
-    def _is_bool_like(self, v: Any) -> bool:
-        return self._parse_bool_like(v) is not None
+    def _is_bool_like_key(self, key: str, v: Any) -> bool:
+        return self._parse_bool_like_key(key, v) is not None
 
-    def _norm_bool_str(self, b: bool) -> str:
-        return "true" if bool(b) else "false"
+    def _format_bool_like(self, template_val: Any, b: bool) -> str:
+        """Préserve le format d'origine: 1/0, on/off, yes/no, enabled/disabled, true/false."""
+        t = "" if template_val is None else str(template_val).strip().lower()
+        if t in {"0", "1"}:
+            return "1" if b else "0"
+        if t in {"on", "off"}:
+            return "on" if b else "off"
+        if t in {"yes", "no", "y", "n"}:
+            return "yes" if b else "no"
+        if t in {"enabled", "disabled"}:
+            return "enabled" if b else "disabled"
+        return "true" if b else "false"
 
     def _is_number_like(self, v: Any) -> bool:
         if v is None:
@@ -608,11 +686,9 @@ class ControlUI:
         if not k:
             return "Other"
 
-        # Log enable (priorité si c'est clairement du flag debug/log)
         if re.search(r"\b(LOG|DEBUG)\b", k) and not (k.startswith("ICECAST_") or k.startswith("SCHED_")):
             return "Log enable"
 
-        # Top-level prefixes
         if k.startswith("SCHED_"):
             return "SCHED"
         if k.startswith("PLAYBIN_"):
@@ -622,11 +698,9 @@ class ControlUI:
         if k.startswith("ICECAST_"):
             return "ICECAST"
 
-        # Encode (best-effort heuristics)
         if k.startswith("ENCODE_") or k.startswith("AUDIO_ENCODE_") or k.startswith("OUTPUT_ENCODE_"):
             return "Encode"
 
-        # PREPROCESS family and subcategories
         if k.startswith("PREPROCESS_"):
             if k.startswith("PREPROCESS_FFMPEG"):
                 return "Preprocess (FFmpeg)"
@@ -650,7 +724,6 @@ class ControlUI:
                 return "PREPROCESS_LIMITER"
             return "PREPROCESS"
 
-        # Log enable fallback for SCHED/ICECAST log flags
         if re.search(r"\b(LOG|DEBUG)\b", k):
             return "Log enable"
 
@@ -966,10 +1039,8 @@ class ControlUI:
                 ui.label("compose env (grouped)").classes("text-xs").style("opacity:.85;")
 
             with ui.element("div").classes("az-card-b"):
-                # Toolbar
                 with ui.element("div").classes("az-settings-toolbar"):
                     with ui.element("div").classes("az-settings-tools-left"):
-                        # Service selector (engine/scheduler)
                         svc_opts: Dict[str, str] = {"engine": "Engine", "scheduler": "Scheduler"}
                         self._settings_service_select = ui.select(
                             options=svc_opts,
@@ -999,7 +1070,6 @@ class ControlUI:
 
                 self._settings_grid_container = ui.element("div").classes("az-settings-grid")
 
-                # Legacy raw editor kept in Advanced only (safety net)
                 with ui.expansion("Raw env editor (advanced / fallback)", icon="tune").classes("mt-3"):
                     ui.label("Éditeur brut key/value (fallback). À utiliser quand un paramètre ne remonte pas bien dans la vue catégorisée.").style(
                         "font-size: 12px; opacity:.75; margin-bottom: 10px;"
@@ -1011,7 +1081,6 @@ class ControlUI:
             self._settings_service = str(e.value).strip() or "engine"
         except Exception:
             self._settings_service = "engine"
-        # reset search to avoid confusion across services
         if self._settings_search:
             self._settings_search.set_value("")
         ui.timer(0.01, self.refresh_settings, once=True)
@@ -1037,7 +1106,6 @@ class ControlUI:
         advanced = bool(self._settings_advanced)
         env = self._settings_env_work or {}
 
-        # bucketize keys
         buckets: Dict[str, List[str]] = {c: [] for c in self.SETTINGS_CATEGORIES_ORDER}
         for k in sorted(env.keys()):
             cat = self._category_for_key(k)
@@ -1050,15 +1118,12 @@ class ControlUI:
             for cat in self.SETTINGS_CATEGORIES_ORDER:
                 keys = list(buckets.get(cat, []))
 
-                # filter by search
                 if q:
                     keys = [k for k in keys if q in k.lower()]
 
-                # normal mode: bool only
                 if not advanced:
-                    keys = [k for k in keys if self._is_bool_like(env.get(k))]
+                    keys = [k for k in keys if self._is_bool_like_key(k, env.get(k))]
 
-                # en mode normal, on skip les catégories vides pour réduire le bruit
                 if not advanced and not keys:
                     continue
 
@@ -1072,16 +1137,14 @@ class ControlUI:
                             ui.html('<div class="set-empty">—</div>')
                             continue
 
-                        # bool first in advanced for readability
                         if advanced:
-                            keys.sort(key=lambda kk: (0 if self._is_bool_like(env.get(kk)) else 1, kk))
+                            keys.sort(key=lambda kk: (0 if self._is_bool_like_key(kk, env.get(kk)) else 1, kk))
 
                         for key in keys:
                             val = env.get(key, "")
                             self._render_setting_row(key, val, advanced=advanced)
 
     def _render_setting_row(self, key: str, val: str, advanced: bool) -> None:
-        # All updates go into _settings_env_work to survive re-render
         def set_work(v: Any) -> None:
             self._settings_env_work[str(key)] = "" if v is None else str(v)
 
@@ -1089,18 +1152,19 @@ class ControlUI:
             k_e = html.escape(str(key))
             ui.html(f'<div class="set-k" data-copy="{k_e}" title="{k_e}">{k_e}</div>')
 
-            b = self._parse_bool_like(val)
+            b = self._parse_bool_like_key(key, val)
             if b is not None:
-                sw = ui.switch(value=bool(b), on_change=lambda e: set_work(self._norm_bool_str(bool(e.value)))).props("dense").classes("set-ctl")
+                sw = ui.switch(
+                    value=bool(b),
+                    on_change=lambda e: set_work(self._format_bool_like(val, bool(e.value))),
+                ).props("dense").classes("set-ctl")
                 self._settings_inputs[key] = sw
                 return
 
-            # Normal mode doesn't render non-bool rows at all (filtered earlier)
             if not advanced:
                 ui.html('<div class="set-empty">—</div>')
                 return
 
-            # Advanced: text/number input
             inp = ui.input(
                 value=str(val),
                 placeholder="value",
@@ -1111,7 +1175,6 @@ class ControlUI:
             self._settings_inputs[key] = inp
 
     async def refresh_settings(self) -> None:
-        # Load env from selected service endpoint
         svc = self._settings_service or "engine"
         path = self._compose_env_endpoint(svc)
 
@@ -1131,16 +1194,14 @@ class ControlUI:
                 clean[kk] = "" if v is None else str(v)
 
             self._settings_env_base = dict(clean)
-            # only refresh work env if it's empty or if service changed effectively
             self._settings_env_work = dict(clean)
 
-            # sync raw editor target
             self._compose_env_target_service = svc
             if self._compose_env_title_label:
                 self._compose_env_title_label.set_text(f"Edit environment variables ({self._settings_service_label(svc)})")
 
             self._render_settings_grid()
-            await self.refresh_compose_env_editor()  # keep raw editor consistent if opened
+            await self.refresh_compose_env_editor()
         except Exception as e:
             self._settings_env_base = {}
             self._settings_env_work = {"error": str(e)}
@@ -1156,7 +1217,6 @@ class ControlUI:
 
         self._compose_env_busy = True
         try:
-            # Serialize full map (work env already includes untouched keys)
             out: Dict[str, str] = {}
             for k, v in (self._settings_env_work or {}).items():
                 kk = str(k).strip()
@@ -1184,7 +1244,9 @@ class ControlUI:
     def _build_raw_env_editor(self) -> None:
         with ui.element("div").classes("az-editor"):
             with ui.element("div").classes("az-editor-h"):
-                self._compose_env_title_label = ui.label(f"Edit environment variables ({self._settings_service_label(self._compose_env_target_service)})").style("font-weight: 950;")
+                self._compose_env_title_label = ui.label(
+                    f"Edit environment variables ({self._settings_service_label(self._compose_env_target_service)})"
+                ).style("font-weight: 950;")
                 with ui.row().classes("items-center gap-2"):
                     ui.button("Reload", on_click=self.refresh_compose_env_editor).props("outline")
                     ui.button("Add", on_click=self._compose_env_add_row).props("outline")

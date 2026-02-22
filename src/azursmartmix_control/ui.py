@@ -34,9 +34,15 @@ AZURA_CSS = r"""
   --az-radius: 10px;
   --az-font: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
   --az-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --wrap-max: 1860px;
   --grid-gap: 18px;
 }
+
+/* ✅ 90% width container must include padding */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ✅ +1 point globally (base font size) */
+html { font-size: 17px !important; }
+body { font-size: 17px !important; }
 
 html, body { background: var(--az-bg) !important; color: var(--az-text) !important; font-family: var(--az-font) !important; }
 .q-page-container, .q-layout, .q-page { background: var(--az-bg) !important; }
@@ -109,7 +115,13 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-topbar .az-brand { font-weight: 900; }
 .az-topbar .az-sub { opacity: .85; font-weight: 600; }
 
-.az-wrap{ width:100%; max-width: var(--wrap-max); margin: 0 auto; padding: 18px 18px 28px 18px; }
+/* ✅ center + 90% width */
+.az-wrap{
+  width: 90%;
+  max-width: 90%;
+  margin: 0 auto;
+  padding: 18px 18px 28px 18px;
+}
 
 .az-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: var(--grid-gap); }
 @media (max-width: 1200px){ .az-grid{ grid-template-columns: 1fr; } }
@@ -136,7 +148,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-badge{
   display:inline-flex; align-items:center; gap:8px;
   padding:6px 10px; border-radius:999px;
-  font-weight:900; font-size:12px;
+  font-weight:900; font-size:13px; /* +1 */
   border:1px solid var(--az-border);
   background: rgba(255,255,255,.05);
 }
@@ -173,7 +185,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   border-bottom: 1px solid rgba(255,255,255,.08);
   color: rgba(255,255,255,.92);
 }
-.rt-table{ width: 100%; border-collapse: collapse; font-size: 13px; }
+.rt-table{ width: 100%; border-collapse: collapse; font-size: 14px; } /* +1 */
 .rt-table tr td{
   padding: 8px 12px;
   border-bottom: 1px solid rgba(255,255,255,.06);
@@ -195,7 +207,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .console-frame { background: rgba(0,0,0,.55) !important; }
 .console-content{
   font-family: var(--az-mono) !important;
-  font-size: 12px !important;
+  font-size: 13px !important; /* +1 */
   line-height: 1.35 !important;
   color: rgba(255,255,255,.86) !important;
   white-space: pre-wrap !important;
@@ -229,7 +241,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .az-player .hint{
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px; /* +1 */
   color: rgba(255,255,255,.65);
   font-family: var(--az-mono);
 }
@@ -242,7 +254,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .np-line{
   font-family: var(--az-mono);
-  font-size: 12px;
+  font-size: 13px; /* +1 */
   color: rgba(255,255,255,.80);
 }
 .np-k{ color: rgba(255,255,255,.55); }
@@ -316,14 +328,13 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .set-box-h .meta{
   font-family: var(--az-mono);
-  font-size: 11px;
+  font-size: 12px; /* +1 */
   opacity:.75;
 }
 .set-box-b{
   padding: 6px 10px;
 }
 
-/* ✅ +90% on the left “name” column (readability) */
 .set-row{
   display:grid;
   grid-template-columns: 520px 1fr;
@@ -342,7 +353,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 
 .set-name{
-  font-size: 13px;
+  font-size: 14px; /* +1 */
   font-weight: 900;
   color: rgba(255,255,255,.94);
   white-space: nowrap;
@@ -352,7 +363,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 
 .set-key{
   font-family: var(--az-mono);
-  font-size: 11px;
+  font-size: 12px; /* +1 */
   color: rgba(255,255,255,.70);
   white-space: nowrap;
   overflow: hidden;
@@ -360,7 +371,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 
 .set-desc{
-  font-size: 11px;
+  font-size: 12px; /* +1 */
   color: var(--az-muted);
   line-height: 1.25;
   white-space: normal;
@@ -380,6 +391,8 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   font-family: var(--az-mono) !important;
 }
 """
+
+
 AZURA_JS = r"""
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-copy]');
@@ -394,18 +407,14 @@ document.addEventListener('click', (ev) => {
 class ControlUI:
     """AzurSmartMix Control UI.
 
-    Changes requested:
-    - Dashboard: remove the "Engine env (docker-compose)" card.
-    - Settings: drive the UI exclusively from azursmartmix_env_reference_v2.csv
-      (english display name, category, priority primary/secondary, explanation).
+    Dashboard: Engine env frame removed (as requested).
+    Settings: fully CSV-driven (display name, category, priority, explanation).
     """
 
-    # bool words only (NOT 0/1 by default)
     _BOOL_TRUE_WORD = {"true", "yes", "y", "on", "enabled"}
     _BOOL_FALSE_WORD = {"false", "no", "n", "off", "disabled"}
     _BOOL_NUM = {"0", "1"}
 
-    # Accept 0/1 as bool only if key looks like a flag
     _BOOL_KEY_SUFFIXES = (
         "_ENABLE",
         "_ENABLED",
@@ -469,15 +478,12 @@ class ControlUI:
         self._tag_select = None
         self._tag_value = None  # type: ignore[assignment]
 
-        self._restart_needed = False
         self._restart_badge = None
 
-        # Tabs
         self._tabs = None
         self._tab_dashboard = "Dashboard"
         self._tab_settings = "Settings"
 
-        # Settings UI state
         self._settings_service = "engine"
         self._settings_advanced = False
         self._settings_service_select = None
@@ -488,11 +494,9 @@ class ControlUI:
         self._settings_env_work: Dict[str, str] = {}
         self._settings_inputs: Dict[str, Any] = {}
 
-        # CSV-driven reference
         self._env_ref_by_key: Dict[str, Dict[str, str]] = {}
         self._category_order: List[str] = []
 
-        # Compose env save/read settings
         self._compose_env_busy = False
         self._compose_env_format = "dict"
 
@@ -501,9 +505,6 @@ class ControlUI:
     # -------------------- CSV reference loader --------------------
 
     def _load_env_reference_csv(self) -> None:
-        """Load env reference CSV (display name, category, priority, explanation)."""
-
-        # Prefer explicit env var or Settings attr if you later add one
         candidates: List[str] = []
         try:
             maybe = getattr(self.settings, "env_reference_csv", None)
@@ -516,13 +517,11 @@ class ControlUI:
         if env_path:
             candidates.append(env_path)
 
-        # Default: same directory as this ui.py module
         try:
             candidates.append(str(Path(__file__).with_name("azursmartmix_env_reference_v2.csv")))
         except Exception:
             pass
 
-        # Common alternative mounts
         candidates.extend(
             [
                 "/config/azursmartmix_env_reference_v2.csv",
@@ -541,7 +540,6 @@ class ControlUI:
                 continue
 
         if not path:
-            # No CSV found => keep empty mapping (UI still works but uses raw keys)
             self._env_ref_by_key = {}
             self._category_order = ["Other"]
             return
@@ -552,7 +550,6 @@ class ControlUI:
 
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
-            # expected columns: parameter, category, priority, english_name, explanation
             for row in reader:
                 if not row:
                     continue
@@ -724,7 +721,6 @@ class ControlUI:
                 with ui.tab_panel(self._tab_dashboard):
                     with ui.element("div").classes("az-grid"):
                         self._card_runtime()
-                        # ✅ removed Engine env frame as requested
                         self._card_now()
                         self._card_upcoming()
                     with ui.element("div").classes("az-grid").style("margin-top: 16px;"):
@@ -765,8 +761,8 @@ class ControlUI:
                     ui.label("Operations Console")
                     ui.button("Close", on_click=d.close).props("outline")
                 with ui.element("div").classes("az-card-b"):
-                    ui.label(f"cwd: {self.settings.azuramix_dir}").style("font-family: var(--az-mono); font-size: 12px; opacity:.85;")
-                    ui.label(f"compose: {self.settings.azuramix_compose_file}").style("font-family: var(--az-mono); font-size: 12px; opacity:.65; margin-top: 2px;")
+                    ui.label(f"cwd: {self.settings.azuramix_dir}").style("font-family: var(--az-mono); font-size: 13px; opacity:.85;")
+                    ui.label(f"compose: {self.settings.azuramix_compose_file}").style("font-family: var(--az-mono); font-size: 13px; opacity:.65; margin-top: 2px;")
                     ui.separator().style("opacity:.25; margin: 10px 0;")
                     with ui.element("div").classes("console-frame").style("height: 520px;"):
                         self._ops_html = ui.html('<div class="console-content">—</div>')
@@ -879,7 +875,13 @@ class ControlUI:
                 raw = default
             return html.escape(str(raw))
 
-        rows = [("name", v("name")), ("image", v("image")), ("status", v("status")), ("health", v("health", "-")), ("uptime", v("uptime", "-"))]
+        rows = [
+            ("name", v("name")),
+            ("image", v("image")),
+            ("status", v("status")),
+            ("health", v("health", "-")),
+            ("uptime", v("uptime", "-")),
+        ]
         tr = "".join(f'<tr><td class="rt-k">{html.escape(k)}</td><td class="rt-v" data-copy="{val}">{val}</td></tr>' for k, val in rows)
         return f'<table class="rt-table">{tr}</table>'
 
@@ -894,7 +896,7 @@ class ControlUI:
                 self._now_title = ui.label("—").classes("text-xl").style("font-weight: 950; margin: 2px 0 0 0;")
                 self._now_meta = ui.html(self._now_meta_html({}))
                 self._now_player = ui.html(self._player_html(stream_url))
-                ui.label("Sources: Icecast(observed) + scheduler NEXT + engine STREAM_START hint").style("font-size: 12px; opacity:.7; margin-top: 10px;")
+                ui.label("Sources: Icecast(observed) + scheduler NEXT + engine STREAM_START hint").style("opacity:.7; margin-top: 10px;")
 
     def _now_meta_html(self, now: Dict[str, Any]) -> str:
         playlist_eff = now.get("playlist_effective")
@@ -1000,7 +1002,7 @@ class ControlUI:
 
                 ui.label(
                     "Primary vars are always visible. Secondary vars require Advanced=ON. Values are persisted into docker-compose.yml (restart/recreate required)."
-                ).style("font-size: 12px; opacity:.75; margin-bottom: 10px;")
+                ).style("opacity:.75; margin-bottom: 10px;")
 
                 self._settings_grid_container = ui.element("div").classes("az-settings-grid")
 
@@ -1196,42 +1198,6 @@ class ControlUI:
             r.raise_for_status()
             return r.text
 
-    _re_level = re.compile(r"\b(INFO|WARN|WARNING|ERROR|CRITICAL|DEBUG)\b")
-    _re_engine_tag = re.compile(r"\bazurmixd\.engine\b")
-    _re_sched_tag = re.compile(r"\bazurmixd\.scheduler\b")
-    _re_preprocess = re.compile(r"\bpreprocess:\b")
-    _re_bridge = re.compile(r"\bbridgeplan:\b")
-    _re_aft = re.compile(r"\bAFT#\d+\b")
-    _re_icecast = re.compile(r"\b(Icecast|ICECAST|/status-json\.xsl|mount|listeners?)\b", re.IGNORECASE)
-    _re_uri = re.compile(r"\b(file:///[^ ]+)\b")
-    _re_stream_start = re.compile(r"\bBUS\s+STREAM_START\b", re.IGNORECASE)
-
-    def _highlight_logs_html(self, text: str) -> str:
-        esc = html.escape(text)
-
-        def repl_level(m: re.Match) -> str:
-            lvl = m.group(1)
-            cls = "t-info"
-            if lvl in ("WARN", "WARNING"):
-                cls = "t-warn"
-            elif lvl in ("ERROR", "CRITICAL"):
-                cls = "t-err"
-            elif lvl == "DEBUG":
-                cls = "t-dim"
-            return f'<span class="{cls} t-bold">{lvl}</span>'
-
-        esc = self._re_level.sub(repl_level, esc)
-        esc = self._re_engine_tag.sub(r'<span class="t-cyan t-bold">azurmixd.engine</span>', esc)
-        esc = self._re_sched_tag.sub(r'<span class="t-cyan t-bold">azurmixd.scheduler</span>', esc)
-        esc = self._re_preprocess.sub(r'<span class="t-vio t-bold">preprocess:</span>', esc)
-        esc = self._re_bridge.sub(r'<span class="t-vio">bridgeplan:</span>', esc)
-        esc = self._re_aft.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
-        esc = self._re_icecast.sub(lambda m: f'<span class="t-cyan">{m.group(0)}</span>', esc)
-        esc = self._re_stream_start.sub(lambda m: f'<span class="t-ok t-bold">{m.group(0)}</span>', esc)
-        esc = self._re_uri.sub(r'<span class="t-dim">\1</span>', esc)
-
-        return f'<div class="console-content">{esc}</div>'
-
     # -------------------- Refresh flows --------------------
 
     async def refresh_all(self) -> None:
@@ -1296,7 +1262,7 @@ class ControlUI:
         self._up_list_container.clear()
         with self._up_list_container:
             if not items:
-                ui.html('<div style="opacity:.7; font-size: 12px;">—</div>')
+                ui.html('<div style="opacity:.7;">—</div>')
                 return
             for i, it in enumerate(items, start=1):
                 if not isinstance(it, dict):
@@ -1322,7 +1288,7 @@ class ControlUI:
         try:
             eng = await self._get_text("/logs?service=engine&tail=200")
             if self._log_html_engine:
-                self._log_html_engine.set_content(self._highlight_logs_html(eng))
+                self._log_html_engine.set_content(f'<div class="console-content">{html.escape(eng)}</div>')
         except Exception:
             if self._log_html_engine:
                 self._log_html_engine.set_content('<div class="console-content">—</div>')
@@ -1330,7 +1296,7 @@ class ControlUI:
         try:
             sch = await self._get_text("/logs?service=scheduler&tail=200")
             if self._log_html_sched:
-                self._log_html_sched.set_content(self._highlight_logs_html(sch))
+                self._log_html_sched.set_content(f'<div class="console-content">{html.escape(sch)}</div>')
         except Exception:
             if self._log_html_sched:
                 self._log_html_sched.set_content('<div class="console-content">—</div>')

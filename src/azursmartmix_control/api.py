@@ -13,8 +13,8 @@ from azursmartmix_control.docker_client import DockerClient
 from azursmartmix_control.scheduler_client import SchedulerClient
 from azursmartmix_control.compose_reader import (
     get_service_env,
-    get_service_env_from_host_compose,
-    set_service_env_in_host_compose,
+    get_env_from_host_envfile,
+    set_env_in_host_envfile,
 )
 from azursmartmix_control.icecast_client import IcecastClient
 
@@ -83,8 +83,11 @@ def _build_image_ref(settings: Settings, tag: Optional[str]) -> str:
 
 
 class ComposeEnvSaveRequest(BaseModel):
+    # UI envoie un dict KEY->VALUE
     environment: Dict[str, str] = Field(default_factory=dict)
-    env_format_prefer: str = Field(default="dict", description="dict|list")
+
+    # legacy field (compose env could be dict/list). Kept for compatibility with existing UI payloads.
+    env_format_prefer: str = Field(default="dict", description="dict|list (legacy, ignored for env_file)")
 
 
 def create_api(settings: Settings) -> FastAPI:
@@ -168,24 +171,27 @@ def create_api(settings: Settings) -> FastAPI:
         lines.append(f"overall_ok: {bool(r.get('ok'))}")
         return "\n".join(lines).strip() + "\n"
 
-    # ------------------- NEW: Compose env editor (host compose) -------------------
+    # ------------------- Settings editor (env_file on host) -------------------
+    # API contract remains the same: /compose/engine_env
+    # Implementation: read/write /var/azuramix/azuramix.env only.
 
     @app.get("/compose/engine_env")
     def compose_engine_env() -> Dict[str, Any]:
-        data = get_service_env_from_host_compose(settings.azuramix_compose_file, settings.compose_service_engine)
+        data = get_env_from_host_envfile(settings.azuramix_env_file)
+        # keep UI stable: pretend this is "engine env"
+        data["service"] = settings.compose_service_engine
         data["restart_required"] = False
         return data
 
     @app.post("/compose/engine_env")
     def compose_engine_env_save(req: ComposeEnvSaveRequest) -> Dict[str, Any]:
-        r = set_service_env_in_host_compose(
-            host_compose_path=settings.azuramix_compose_file,
-            service_name=settings.compose_service_engine,
-            env_map=req.environment or {},
-            env_format_prefer=(req.env_format_prefer or "dict"),
+        r = set_env_in_host_envfile(
+            env_file_path=settings.azuramix_env_file,
+            env_updates=req.environment or {},
         )
+        r["service"] = settings.compose_service_engine
         r["restart_required"] = True
-        r["message"] = "Saved. Need to restart to take effect."
+        r["message"] = "Saved to azuramix.env. Need to restart (docker compose up -d) to take effect."
         return r
 
     # ------------------- Existing endpoints -------------------
@@ -197,6 +203,7 @@ def create_api(settings: Settings) -> FastAPI:
 
     @app.get("/panel/engine_env")
     def panel_engine_env() -> Dict[str, Any]:
+        # legacy: read-only view from mounted compose file inside container
         return get_service_env(settings.compose_path, settings.compose_service_engine)
 
     @app.get("/panel/runtime")
@@ -294,7 +301,9 @@ def create_api(settings: Settings) -> FastAPI:
 
         predicted_next = None
         if effective_now and isinstance(effective_now, dict):
-            title_effective = effective_now.get("title_display") or docker_client.display_title(str(effective_now.get("title") or ""))
+            title_effective = effective_now.get("title_display") or docker_client.display_title(
+                str(effective_now.get("title") or "")
+            )
             playlist_effective = effective_now.get("playlist") or playlist_effective
             now_mode = "promoted_from_upcoming"
 

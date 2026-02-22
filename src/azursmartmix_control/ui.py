@@ -1017,24 +1017,11 @@ class ControlUI:
             with ui.element("div").classes("az-card-b"):
                 with ui.element("div").classes("az-settings-toolbar"):
                     with ui.element("div").classes("az-settings-tools-left"):
-                        svc_opts: Dict[str, str] = {"engine": "Engine", "scheduler": "Scheduler"}
-                        self._settings_service_select = ui.select(
-                            options=svc_opts,
-                            value=self._settings_service,
-                            label="Service",
-                            on_change=self._on_settings_service_change,
-                        ).props("dense outlined dark").style("min-width: 160px;")
 
                         self._settings_advanced_switch = ui.switch(
                             "Advanced",
                             value=self._settings_advanced,
                             on_change=self._on_settings_advanced_change,
-                        ).props("dense")
-
-                        self._settings_show_unmapped_switch = ui.switch(
-                            "Unmapped",
-                            value=self._settings_show_unmapped,
-                            on_change=self._on_settings_show_unmapped_change,
                         ).props("dense")
 
                         self._settings_search = ui.input(

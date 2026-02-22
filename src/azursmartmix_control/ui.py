@@ -37,10 +37,7 @@ AZURA_CSS = r"""
   --grid-gap: 18px;
 }
 
-/* ✅ 90% width container must include padding */
 *, *::before, *::after { box-sizing: border-box; }
-
-/* ✅ +1 point globally (base font size) */
 html { font-size: 17px !important; }
 body { font-size: 17px !important; }
 
@@ -64,9 +61,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   background: transparent !important;
 }
 
-/* ------------------------------------------------------------
-   FORCE QUASAR INPUTS TO BE DARK (fix "black text" everywhere)
-   ------------------------------------------------------------ */
+/* Force Quasar inputs to be dark */
 .q-field__native,
 .q-field__input,
 .q-field__prefix,
@@ -104,8 +99,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   color: rgba(255,255,255,.92) !important;
 }
 
-/* ------------------------------------------------------------ */
-
+/* top bar */
 .az-topbar{
   background: linear-gradient(0deg, var(--az-blue) 0%, var(--az-blue-dark) 100%) !important;
   color: white !important;
@@ -115,7 +109,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-topbar .az-brand { font-weight: 900; }
 .az-topbar .az-sub { opacity: .85; font-weight: 600; }
 
-/* ✅ center + 90% width */
+/* 90% center */
 .az-wrap{
   width: 90%;
   max-width: 90%;
@@ -148,7 +142,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .az-badge{
   display:inline-flex; align-items:center; gap:8px;
   padding:6px 10px; border-radius:999px;
-  font-weight:900; font-size:13px; /* +1 */
+  font-weight:900; font-size:13px;
   border:1px solid var(--az-border);
   background: rgba(255,255,255,.05);
 }
@@ -185,7 +179,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   border-bottom: 1px solid rgba(255,255,255,.08);
   color: rgba(255,255,255,.92);
 }
-.rt-table{ width: 100%; border-collapse: collapse; font-size: 14px; } /* +1 */
+.rt-table{ width: 100%; border-collapse: collapse; font-size: 14px; }
 .rt-table tr td{
   padding: 8px 12px;
   border-bottom: 1px solid rgba(255,255,255,.06);
@@ -207,7 +201,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 .console-frame { background: rgba(0,0,0,.55) !important; }
 .console-content{
   font-family: var(--az-mono) !important;
-  font-size: 13px !important; /* +1 */
+  font-size: 13px !important;
   line-height: 1.35 !important;
   color: rgba(255,255,255,.86) !important;
   white-space: pre-wrap !important;
@@ -241,7 +235,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .az-player .hint{
   margin-top: 8px;
-  font-size: 13px; /* +1 */
+  font-size: 13px;
   color: rgba(255,255,255,.65);
   font-family: var(--az-mono);
 }
@@ -254,7 +248,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .np-line{
   font-family: var(--az-mono);
-  font-size: 13px; /* +1 */
+  font-size: 13px;
   color: rgba(255,255,255,.80);
 }
 .np-k{ color: rgba(255,255,255,.55); }
@@ -277,9 +271,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   background: rgba(0,0,0,.15) !important;
 }
 
-/* ------------------------------------------------------------
-   SETTINGS UI (2 columns of category cards)
-   ------------------------------------------------------------ */
+/* Settings */
 .az-settings-toolbar{
   display:flex;
   flex-wrap: wrap;
@@ -288,21 +280,18 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   justify-content: space-between;
   margin-bottom: 10px;
 }
-
 .az-settings-tools-left{
   display:flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items:center;
 }
-
 .az-settings-tools-right{
   display:flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items:center;
 }
-
 .az-settings-topcats{
   margin: 10px 0 12px 0;
   border: 1px solid rgba(255,255,255,.10);
@@ -338,7 +327,7 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 .set-box-h .meta{
   font-family: var(--az-mono);
-  font-size: 12px; /* +1 */
+  font-size: 12px;
   opacity:.75;
 }
 .set-box-b{
@@ -363,17 +352,15 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 
 .set-name{
-  font-size: 14px; /* +1 */
+  font-size: 14px;
   font-weight: 950;
   color: rgba(255,255,255,.94);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-/* ✅ parameter key hidden (kept only as tooltip/copy target on name) */
 .set-desc{
-  font-size: 12px; /* +1 */
+  font-size: 12px;
   color: var(--az-muted);
   line-height: 1.25;
   white-space: normal;
@@ -394,7 +381,6 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 }
 """
 
-
 AZURA_JS = r"""
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-copy]');
@@ -409,8 +395,8 @@ document.addEventListener('click', (ev) => {
 class ControlUI:
     """AzurSmartMix Control UI.
 
-    Dashboard: Engine env frame removed (as requested).
-    Settings: CSV-driven (english name, explanation, category, priority, + top_category).
+    Settings: CSV-driven reference with top_category sub-tabs.
+    IMPORTANT: tabs are computed from CSV + env union, not from env only.
     """
 
     _BOOL_TRUE_WORD = {"true", "yes", "y", "on", "enabled"}
@@ -496,7 +482,6 @@ class ControlUI:
         self._settings_env_work: Dict[str, str] = {}
         self._settings_inputs: Dict[str, Any] = {}
 
-        # NEW: top category tabs (2 sub-onglets)
         self._settings_topcat_container = None
         self._settings_topcat_tabs = None
         self._settings_topcat_value: Optional[str] = None
@@ -509,7 +494,7 @@ class ControlUI:
 
         self._load_env_reference_csv()
 
-    # -------------------- CSV reference loader --------------------
+    # -------------------- CSV loader --------------------
 
     def _load_env_reference_csv(self) -> None:
         candidates: List[str] = []
@@ -564,9 +549,7 @@ class ControlUI:
                 if not key:
                     continue
 
-                # NEW: top_category (split into sub-tabs)
                 top_category = (row.get("top_category") or "Main").strip() or "Main"
-
                 category = (row.get("category") or "Other").strip() or "Other"
                 priority = (row.get("priority") or "secondary").strip().lower() or "secondary"
                 if priority not in {"primary", "secondary"}:
@@ -593,7 +576,7 @@ class ControlUI:
         self._env_ref_by_key = ref
         self._category_order = cat_order
 
-    # -------------------- Small helpers --------------------
+    # -------------------- helpers --------------------
 
     def _stream_public_url(self) -> str:
         public = getattr(self.settings, "icecast_public_url", "") or ""
@@ -687,29 +670,33 @@ class ControlUI:
             "explanation": "Unmapped parameter (not present in env reference CSV).",
         }
 
-    def _topcats_from_env(self, env: Dict[str, str]) -> List[str]:
-        """Collect distinct top_category values for current env keys, stable order (CSV order-ish)."""
+    def _all_setting_keys(self, env: Dict[str, str]) -> List[str]:
+        """Return the authoritative key list for settings UI.
+
+        We show:
+        - all keys from CSV (so tabs like 'audio' exist even if not yet defined in env)
+        - plus any keys present in env but missing from CSV (so nothing is lost)
+        """
+        keys = set(self._env_ref_by_key.keys()) | set((env or {}).keys())
+        out = [k for k in keys if str(k).strip()]
+        out.sort()
+        return out
+
+    def _topcats_from_keys(self, keys: List[str]) -> List[str]:
         seen: set[str] = set()
         out: List[str] = []
-
-        # Favor order as encountered in env keys (which is stable-ish), fallback to sorted
-        for k in (env or {}).keys():
+        for k in keys:
             tc = (self._get_ref(k).get("top_category") or "Main").strip() or "Main"
             if tc not in seen:
                 seen.add(tc)
                 out.append(tc)
-
-        # Ensure at least one
         if not out:
             out = ["Main"]
-
-        # Keep "Main" first if present
         if "Main" in out:
             out = ["Main"] + [x for x in out if x != "Main"]
-
         return out
 
-    # -------------------- Build UI --------------------
+    # -------------------- build UI --------------------
 
     def build(self) -> None:
         ui.add_head_html(f"<style>{AZURA_CSS}</style>")
@@ -786,7 +773,7 @@ class ControlUI:
             "</span>"
         )
 
-    # -------------------- Ops modal + API calls --------------------
+    # -------------------- Ops modal --------------------
 
     def _build_ops_dialog(self) -> None:
         with ui.dialog() as d:
@@ -885,7 +872,7 @@ class ControlUI:
             qs = "?tag=" + urllib.parse.quote(tag, safe="")
         await self._run_op(f"Update (down + rm image:{tag or 'default'})", "/ops/compose/update" + qs, clears_restart_hint=True)
 
-    # -------------------- Dashboard cards --------------------
+    # -------------------- Dashboard --------------------
 
     def _card_runtime(self) -> None:
         with ui.element("div").classes("az-card"):
@@ -1001,7 +988,7 @@ class ControlUI:
                         with ui.element("div").classes("console-frame").style("background: rgba(0,0,0,.55) !important;"):
                             self._log_html_sched = ui.html('<div class="console-content">—</div>')
 
-    # -------------------- Settings tab --------------------
+    # -------------------- Settings --------------------
 
     def _card_settings(self) -> None:
         with ui.element("div").classes("az-card").style("grid-column: 1 / -1; min-width: unset;"):
@@ -1035,7 +1022,6 @@ class ControlUI:
                         ui.button("Reload", on_click=self.refresh_settings).props("outline")
                         ui.button("Save", on_click=self.save_settings).props("unelevated color=positive")
 
-                # NEW: top category sub-tabs container (rebuilt dynamically)
                 self._settings_topcat_container = ui.element("div").classes("az-settings-topcats")
 
                 ui.label(
@@ -1068,13 +1054,11 @@ class ControlUI:
         self._render_settings_grid()
 
     def _build_topcat_tabs(self, topcats: List[str]) -> None:
-        """Rebuild the top-category tabs bar to match CSV distinct values."""
         if not self._settings_topcat_container:
             return
 
         self._settings_topcat_container.clear()
 
-        # keep current selection if still valid
         if self._settings_topcat_value not in topcats:
             self._settings_topcat_value = topcats[0] if topcats else None
 
@@ -1090,10 +1074,12 @@ class ControlUI:
 
         env = self._settings_env_work or {}
 
-        # ensure top-category tabs exist and match current env
-        topcats = self._topcats_from_env(env)
-        self._build_topcat_tabs(topcats)
+        # ✅ KEYS DRIVEN BY CSV + ENV (NOT ENV ONLY)
+        all_keys = self._all_setting_keys(env)
 
+        # ✅ TOP TABS DRIVEN BY CSV + ENV
+        topcats = self._topcats_from_keys(all_keys)
+        self._build_topcat_tabs(topcats)
         selected_topcat = self._settings_topcat_value or (topcats[0] if topcats else None)
 
         self._settings_grid_container.clear()
@@ -1107,7 +1093,7 @@ class ControlUI:
 
         # bucket by category (within selected top_category)
         buckets: Dict[str, List[str]] = {}
-        for k in env.keys():
+        for k in all_keys:
             meta = self._get_ref(k)
             tc = (meta.get("top_category") or "Main").strip() or "Main"
             if selected_topcat and tc != selected_topcat:
@@ -1163,6 +1149,7 @@ class ControlUI:
 
                     with ui.element("div").classes("set-box-b"):
                         for key in keys:
+                            # ✅ if missing from env, show empty value (editable)
                             val = env.get(key, "")
                             self._render_setting_row(key, val)
 
@@ -1179,8 +1166,6 @@ class ControlUI:
 
         with ui.element("div").classes("set-row"):
             with ui.element("div").classes("set-left"):
-                # ✅ only english name (bold) + explanation
-                # key is hidden but still copyable via tooltip and data-copy
                 ui.html(f'<div class="set-name" title="{k_e}" data-copy="{k_e}">{name_e}</div>')
                 ui.html(f'<div class="set-desc">{exp_e if exp_e else "—"}</div>')
 
@@ -1226,8 +1211,9 @@ class ControlUI:
             self._settings_env_base = dict(clean)
             self._settings_env_work = dict(clean)
 
-            # Ensure topcat selection is valid for new env
-            topcats = self._topcats_from_env(self._settings_env_work)
+            # recompute topcat selection based on CSV+ENV
+            all_keys = self._all_setting_keys(self._settings_env_work)
+            topcats = self._topcats_from_keys(all_keys)
             if self._settings_topcat_value not in topcats:
                 self._settings_topcat_value = topcats[0] if topcats else None
 

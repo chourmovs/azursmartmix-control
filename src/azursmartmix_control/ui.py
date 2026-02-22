@@ -303,6 +303,16 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
   align-items:center;
 }
 
+.az-settings-topcats{
+  margin: 10px 0 12px 0;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.az-settings-topcats .q-tabs{
+  background: rgba(0,0,0,.18) !important;
+}
+
 .az-settings-grid{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -354,22 +364,14 @@ html, body { background: var(--az-bg) !important; color: var(--az-text) !importa
 
 .set-name{
   font-size: 14px; /* +1 */
-  font-weight: 900;
+  font-weight: 950;
   color: rgba(255,255,255,.94);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.set-key{
-  font-family: var(--az-mono);
-  font-size: 12px; /* +1 */
-  color: rgba(255,255,255,.70);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* ✅ parameter key hidden (kept only as tooltip/copy target on name) */
 .set-desc{
   font-size: 12px; /* +1 */
   color: var(--az-muted);
@@ -408,7 +410,7 @@ class ControlUI:
     """AzurSmartMix Control UI.
 
     Dashboard: Engine env frame removed (as requested).
-    Settings: fully CSV-driven (display name, category, priority, explanation).
+    Settings: CSV-driven (english name, explanation, category, priority, + top_category).
     """
 
     _BOOL_TRUE_WORD = {"true", "yes", "y", "on", "enabled"}
@@ -494,6 +496,11 @@ class ControlUI:
         self._settings_env_work: Dict[str, str] = {}
         self._settings_inputs: Dict[str, Any] = {}
 
+        # NEW: top category tabs (2 sub-onglets)
+        self._settings_topcat_container = None
+        self._settings_topcat_tabs = None
+        self._settings_topcat_value: Optional[str] = None
+
         self._env_ref_by_key: Dict[str, Dict[str, str]] = {}
         self._category_order: List[str] = []
 
@@ -556,6 +563,10 @@ class ControlUI:
                 key = (row.get("parameter") or "").strip()
                 if not key:
                     continue
+
+                # NEW: top_category (split into sub-tabs)
+                top_category = (row.get("top_category") or "Main").strip() or "Main"
+
                 category = (row.get("category") or "Other").strip() or "Other"
                 priority = (row.get("priority") or "secondary").strip().lower() or "secondary"
                 if priority not in {"primary", "secondary"}:
@@ -565,6 +576,7 @@ class ControlUI:
 
                 ref[key] = {
                     "parameter": key,
+                    "top_category": top_category,
                     "category": category,
                     "priority": priority,
                     "english_name": english_name,
@@ -668,11 +680,34 @@ class ControlUI:
             return meta
         return {
             "parameter": key,
+            "top_category": "Main",
             "category": "Other",
             "priority": "secondary",
             "english_name": key,
             "explanation": "Unmapped parameter (not present in env reference CSV).",
         }
+
+    def _topcats_from_env(self, env: Dict[str, str]) -> List[str]:
+        """Collect distinct top_category values for current env keys, stable order (CSV order-ish)."""
+        seen: set[str] = set()
+        out: List[str] = []
+
+        # Favor order as encountered in env keys (which is stable-ish), fallback to sorted
+        for k in (env or {}).keys():
+            tc = (self._get_ref(k).get("top_category") or "Main").strip() or "Main"
+            if tc not in seen:
+                seen.add(tc)
+                out.append(tc)
+
+        # Ensure at least one
+        if not out:
+            out = ["Main"]
+
+        # Keep "Main" first if present
+        if "Main" in out:
+            out = ["Main"] + [x for x in out if x != "Main"]
+
+        return out
 
     # -------------------- Build UI --------------------
 
@@ -972,7 +1007,7 @@ class ControlUI:
         with ui.element("div").classes("az-card").style("grid-column: 1 / -1; min-width: unset;"):
             with ui.element("div").classes("az-card-h"):
                 ui.label("Settings")
-                ui.label("compose env (CSV-driven)").classes("text-xs").style("opacity:.85;")
+                ui.label("env_file (CSV-driven)").classes("text-xs").style("opacity:.85;")
 
             with ui.element("div").classes("az-card-b"):
                 with ui.element("div").classes("az-settings-toolbar"):
@@ -992,16 +1027,19 @@ class ControlUI:
                         ).props("dense")
 
                         self._settings_search = ui.input(
-                            placeholder="Filter (key / name)…",
+                            placeholder="Filter (name / key / explanation)…",
                             on_change=lambda _e: self._render_settings_grid(),
-                        ).classes("az-inp").props("dense outlined dark").style("min-width: 280px;")
+                        ).classes("az-inp").props("dense outlined dark").style("min-width: 320px;")
 
                     with ui.element("div").classes("az-settings-tools-right"):
                         ui.button("Reload", on_click=self.refresh_settings).props("outline")
                         ui.button("Save", on_click=self.save_settings).props("unelevated color=positive")
 
+                # NEW: top category sub-tabs container (rebuilt dynamically)
+                self._settings_topcat_container = ui.element("div").classes("az-settings-topcats")
+
                 ui.label(
-                    "Primary vars are always visible. Secondary vars require Advanced=ON. Values are persisted into docker-compose.yml (restart/recreate required)."
+                    "Primary vars are always visible. Secondary vars require Advanced=ON. Values are persisted into azuramix.env (restart/recreate required)."
                 ).style("opacity:.75; margin-bottom: 10px;")
 
                 self._settings_grid_container = ui.element("div").classes("az-settings-grid")
@@ -1022,9 +1060,41 @@ class ControlUI:
             self._settings_advanced = False
         self._render_settings_grid()
 
+    def _on_topcat_change(self, e) -> None:
+        try:
+            self._settings_topcat_value = str(e.value).strip() if e.value is not None else None
+        except Exception:
+            self._settings_topcat_value = None
+        self._render_settings_grid()
+
+    def _build_topcat_tabs(self, topcats: List[str]) -> None:
+        """Rebuild the top-category tabs bar to match CSV distinct values."""
+        if not self._settings_topcat_container:
+            return
+
+        self._settings_topcat_container.clear()
+
+        # keep current selection if still valid
+        if self._settings_topcat_value not in topcats:
+            self._settings_topcat_value = topcats[0] if topcats else None
+
+        with self._settings_topcat_container:
+            with ui.tabs(value=self._settings_topcat_value, on_change=self._on_topcat_change).classes("w-full") as t:
+                self._settings_topcat_tabs = t
+                for tc in topcats:
+                    ui.tab(tc)
+
     def _render_settings_grid(self) -> None:
         if not self._settings_grid_container:
             return
+
+        env = self._settings_env_work or {}
+
+        # ensure top-category tabs exist and match current env
+        topcats = self._topcats_from_env(env)
+        self._build_topcat_tabs(topcats)
+
+        selected_topcat = self._settings_topcat_value or (topcats[0] if topcats else None)
 
         self._settings_grid_container.clear()
         self._settings_inputs = {}
@@ -1034,11 +1104,14 @@ class ControlUI:
             q = str(self._settings_search.value or "").strip().lower()
 
         advanced = bool(self._settings_advanced)
-        env = self._settings_env_work or {}
 
+        # bucket by category (within selected top_category)
         buckets: Dict[str, List[str]] = {}
         for k in env.keys():
             meta = self._get_ref(k)
+            tc = (meta.get("top_category") or "Main").strip() or "Main"
+            if selected_topcat and tc != selected_topcat:
+                continue
             cat = meta.get("category", "Other") or "Other"
             buckets.setdefault(cat, []).append(k)
 
@@ -1067,7 +1140,14 @@ class ControlUI:
                     filtered: List[str] = []
                     for k in keys:
                         meta = self._get_ref(k)
-                        if q in k.lower() or q in (meta.get("english_name", "").lower()):
+                        hay = " ".join(
+                            [
+                                k.lower(),
+                                (meta.get("english_name") or "").lower(),
+                                (meta.get("explanation") or "").lower(),
+                            ]
+                        )
+                        if q in hay:
                             filtered.append(k)
                     keys = filtered
 
@@ -1099,8 +1179,9 @@ class ControlUI:
 
         with ui.element("div").classes("set-row"):
             with ui.element("div").classes("set-left"):
-                ui.html(f'<div class="set-name" title="{name_e}" data-copy="{name_e}">{name_e}</div>')
-                ui.html(f'<div class="set-key" title="{k_e}" data-copy="{k_e}">{k_e}</div>')
+                # ✅ only english name (bold) + explanation
+                # key is hidden but still copyable via tooltip and data-copy
+                ui.html(f'<div class="set-name" title="{k_e}" data-copy="{k_e}">{name_e}</div>')
                 ui.html(f'<div class="set-desc">{exp_e if exp_e else "—"}</div>')
 
             b = self._parse_bool_like_key(key, val)
@@ -1144,6 +1225,12 @@ class ControlUI:
 
             self._settings_env_base = dict(clean)
             self._settings_env_work = dict(clean)
+
+            # Ensure topcat selection is valid for new env
+            topcats = self._topcats_from_env(self._settings_env_work)
+            if self._settings_topcat_value not in topcats:
+                self._settings_topcat_value = topcats[0] if topcats else None
+
             self._render_settings_grid()
         except Exception as e:
             self._settings_env_base = {}

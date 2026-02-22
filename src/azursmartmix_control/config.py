@@ -23,14 +23,17 @@ class Settings(BaseSettings):
     # Scheduler API base URL
     sched_base_url: str = Field(default="http://azursmartmix_scheduler:8001", alias="SCHED_BASE_URL")
 
-    # Compose file (read-only mount) used for display env panel
+    # Compose file (read-only mount) used for display env panel (legacy / read-only)
     compose_path: str = Field(default="/compose/docker-compose.yml", alias="COMPOSE_PATH")
     compose_service_engine: str = Field(default="azursmartmix_engine", alias="COMPOSE_SERVICE_ENGINE")
     compose_service_scheduler: str = Field(default="azursmartmix_scheduler", alias="COMPOSE_SERVICE_SCHEDULER")
 
-    # NEW: Host project directory (mounted into control container)
+    # Host project directory (mounted into control container)
     azuramix_dir: str = Field(default="/var/azuramix", alias="AZURAMIX_DIR")
     azuramix_compose_file: str = Field(default="/var/azuramix/docker-compose.yml", alias="AZURAMIX_COMPOSE_FILE")
+
+    # NEW: Host env file (the only file we edit for settings)
+    azuramix_env_file: str = Field(default="/var/azuramix/azuramix.env", alias="AZURAMIX_ENV_FILE")
 
     # Icecast now-playing
     icecast_scheme: str = Field(default="http", alias="ICECAST_SCHEME")
@@ -44,7 +47,10 @@ class Settings(BaseSettings):
     log_tail_lines_max: int = Field(default=2000, alias="LOG_TAIL_LINES_MAX")
 
     # Public stream URL (UI player)
-    icecast_public_url: str = Field(default="http://chourmovs.ddnsfree.com:8000/gst-test.mp3", alias="ICECAST_PUBLIC_URL")
+    icecast_public_url: str = Field(
+        default="http://chourmovs.ddnsfree.com:8000/gst-test.mp3",
+        alias="ICECAST_PUBLIC_URL",
+    )
 
     # Default image ref (fallback for update)
     azursmartmix_image: str = Field(default="chourmovs/azursmartmix:beta1", alias="AZURSMARTMIX_IMAGE")
